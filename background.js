@@ -1,144 +1,53 @@
 importScripts("logger.js");
 SL.log.info("bg", "boot");
 
-const DEFAULT_TIMEOUT_MIN = 5;
-const CHECK_INTERVAL_MIN = 1;
+// ═══════════════════════════════════
+//  Persistent state across SW restarts
+//
+//  MV3 service workers terminate after ~30s of idle. Module-scope variables
+//  reset on wake, so we mirror them to `chrome.storage.session` (memory-backed,
+//  dies on browser close — exactly the lifetime we want). Every mutation
+//  write-throughs to session storage; SW boot reloads everything before any
+//  state-reading code path runs.
+// ═══════════════════════════════════
+const KEY_REDIRECT_DATA = "sl_redirectData";
 
-// { tabId: lastActiveTimestamp }
-const tabActivity = {};
+let redirectData = {};     // { tabId: { chain, finalUrl, finalStatus } }
 
-// Record activity for a tab
-function markActive(tabId) {
-  tabActivity[tabId] = Date.now();
-}
-
-// On tab activated (user switches to it)
-chrome.tabs.onActivated.addListener(({ tabId }) => {
-  markActive(tabId);
-});
-
-// On tab updated (page load, navigation)
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "complete" || changeInfo.url) {
-    markActive(tabId);
+// Boot loader — every code path that touches state must await this once.
+const stateReady = (async () => {
+  try {
+    const data = await chrome.storage.session.get([KEY_REDIRECT_DATA]);
+    redirectData = data[KEY_REDIRECT_DATA] || {};
+    SL.log.info("bg", "state.restored", { redirects: Object.keys(redirectData).length });
+  } catch (err) {
+    SL.log.warn("bg", "state.restore.fail", { error: err.message });
   }
-});
+})();
 
-// On tab created
-chrome.tabs.onCreated.addListener((tab) => {
-  markActive(tab.id);
-});
-
-// On tab removed, clean up
-chrome.tabs.onRemoved.addListener((tabId) => {
-  delete tabActivity[tabId];
-});
-
-// Initialize: mark all existing tabs as active now
-chrome.tabs.query({}, (tabs) => {
-  for (const tab of tabs) {
-    markActive(tab.id);
-  }
-});
-
-// Periodic cleanup check
-chrome.alarms.create("tabCleanup", { periodInMinutes: CHECK_INTERVAL_MIN });
-
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== "tabCleanup") return;
-
-  const { exclusions = [], enabled = true, timeoutMin = DEFAULT_TIMEOUT_MIN } =
-    await chrome.storage.local.get(["exclusions", "enabled", "timeoutMin"]);
-
-  if (!enabled) return;
-
-  const now = Date.now();
-  const timeoutMs = timeoutMin * 60 * 1000;
-  const tabs = await chrome.tabs.query({});
-
-  // Never close the last tab in a window
-  const windowTabCounts = {};
-  for (const tab of tabs) {
-    windowTabCounts[tab.windowId] = (windowTabCounts[tab.windowId] || 0) + 1;
-  }
-
-  // Find the currently active tab so we never close it
-  const activeTabs = new Set();
-  const windows = await chrome.windows.getAll();
-  for (const win of windows) {
-    const [active] = await chrome.tabs.query({
-      active: true,
-      windowId: win.id,
-    });
-    if (active) activeTabs.add(active.id);
-  }
-
-  for (const tab of tabs) {
-    // Skip active tabs
-    if (activeTabs.has(tab.id)) {
-      markActive(tab.id);
-      continue;
-    }
-
-    // Skip pinned tabs
-    if (tab.pinned) continue;
-
-    // Skip if it's the last tab in its window
-    if (windowTabCounts[tab.windowId] <= 1) continue;
-
-    // Skip excluded hosts
-    if (tab.url) {
-      try {
-        const host = new URL(tab.url).hostname;
-        if (
-          exclusions.some(
-            (ex) => host === ex || host.endsWith("." + ex)
-          )
-        ) {
-          continue;
-        }
-      } catch {}
-    }
-
-    // Check inactivity
-    const lastActive = tabActivity[tab.id] || 0;
-    if (now - lastActive >= timeoutMs) {
-      windowTabCounts[tab.windowId]--;
-      SL.log.action("bg", "tab.autoClose", { tabId: tab.id, url: tab.url, idleMin: Math.round((now - lastActive) / 60000) });
-      // Save to closed history before removing
-      saveClosedTab(tab);
-      chrome.tabs.remove(tab.id);
-      delete tabActivity[tab.id];
-    }
-  }
-});
-
-// Save closed tab to history
-function saveClosedTab(tab) {
-  if (!tab.url || tab.url.startsWith("chrome://")) return;
-  chrome.storage.local.get(["closed_tabs"], (data) => {
-    const closed = data.closed_tabs || [];
-    closed.unshift({
-      url: tab.url,
-      title: tab.title || tab.url,
-      favIconUrl: tab.favIconUrl || "",
-      time: Date.now(),
-    });
-    if (closed.length > 50) closed.length = 50;
-    chrome.storage.local.set({ closed_tabs: closed });
+function persistRedirectData() {
+  chrome.storage.session.set({ [KEY_REDIRECT_DATA]: redirectData }).catch((err) => {
+    SL.log.warn("bg", "state.persist.redirectData.fail", { error: err.message });
   });
 }
+
+// On tab removed, clean up redirect data for that tab.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId in redirectData) {
+    delete redirectData[tabId];
+    persistRedirectData();
+  }
+});
 
 // ═══════════════════════════════════
 //  Redirect Tracer
 // ═══════════════════════════════════
-// { tabId: { chain: [{url, statusCode, statusLine}], finalUrl, finalStatus } }
-const redirectData = {};
 
 // When a new main-frame navigation starts, reset the chain
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {
   if (details.frameId !== 0) return;
   redirectData[details.tabId] = { chain: [], finalUrl: null, finalStatus: null };
+  persistRedirectData();
 });
 
 // Capture each redirect hop
@@ -154,6 +63,7 @@ chrome.webRequest.onBeforeRedirect.addListener(
       statusLine: details.statusLine || "",
       redirectUrl: details.redirectUrl,
     });
+    persistRedirectData();
   },
   { urls: ["<all_urls>"] }
 );
@@ -167,22 +77,23 @@ chrome.webRequest.onCompleted.addListener(
     }
     redirectData[details.tabId].finalUrl = details.url;
     redirectData[details.tabId].finalStatus = details.statusCode;
+    persistRedirectData();
   },
   { urls: ["<all_urls>"] }
 );
-
-// Clean up on tab close
-chrome.tabs.onRemoved.addListener((tabId) => {
-  delete redirectData[tabId];
-});
 
 // Respond to popup requests
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   SL.log.info("bg", "msg.received", { type: msg && msg.type, from: sender && sender.id });
   if (msg.type === "getRedirects") {
-    const data = redirectData[msg.tabId] || { chain: [], finalUrl: null, finalStatus: null };
-    SL.log.info("bg", "msg.getRedirects", { tabId: msg.tabId, hops: data.chain.length });
-    sendResponse(data);
+    // Ensure session-restored state is loaded before answering — otherwise a
+    // popup opened right after SW wake gets empty results.
+    stateReady.then(() => {
+      const data = redirectData[msg.tabId] || { chain: [], finalUrl: null, finalStatus: null };
+      SL.log.info("bg", "msg.getRedirects", { tabId: msg.tabId, hops: data.chain.length });
+      sendResponse(data);
+    });
+    return true; // async sendResponse
   }
   if (msg.type === "pip") {
     SL.log.action("bg", "pip", { tabId: msg.tabId });
@@ -219,15 +130,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// Set defaults on install
+// ═══════════════════════════════════
+//  Install / upgrade hooks
+// ═══════════════════════════════════
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(["enabled", "timeoutMin", "exclusions"], (data) => {
-    const defaults = {};
-    if (data.enabled === undefined) defaults.enabled = true;
-    if (data.timeoutMin === undefined) defaults.timeoutMin = DEFAULT_TIMEOUT_MIN;
-    if (data.exclusions === undefined) defaults.exclusions = [];
-    if (Object.keys(defaults).length) {
-      chrome.storage.local.set(defaults);
-    }
+  SL.log.info("bg", "onInstalled");
+
+  // One-time cleanup of orphaned keys from removed features. Idempotent.
+  const ORPHAN_KEYS = [
+    "xdim_enabled", "xdim_theme", "xdim_customHue",          // X Dim (removed)
+    "acr_host", "acr_key", "acr_secret", "music_history",    // Music Recognizer (removed)
+    "nfe_enabled",                                            // NFE — old global key, now per-site
+    "enabled", "timeoutMin", "exclusions", "closed_tabs",    // Tab Cleaner (removed)
+    "sl_prefs_baseline",                                      // Tab Cleaner personal-defaults sentinel
+  ];
+  chrome.storage.local.remove(ORPHAN_KEYS, () => {
+    SL.log.info("bg", "orphan.cleanup", { keys: ORPHAN_KEYS });
   });
+
+  // Also drop the orphan session-storage key from the old Tab Cleaner tabActivity.
+  chrome.storage.session.remove(["sl_tabActivity"]).catch(() => {});
 });

@@ -1,0 +1,15 @@
+# Dependencies (no deps right now, but defensive in case node_modules ever shows up)
+node_modules/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Personal Claude Code settings (project-level settings.json IS tracked)
+.claude/settings.local.json

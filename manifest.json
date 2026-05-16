@@ -3,7 +3,7 @@
   "name": "🚀 SuperLevels",
   "version": "2.0",
   "description": "Personal Chrome utility — dark mode, GDPR cookie dismisser, focus mode (hide feeds + sidebars on YT/X/LinkedIn/FB/Reddit), tab cleaner, cookie editor, redirect tracer, live CSS editor, JS toggle, JSON formatter, picture-in-picture, Google Maps links, view image, save to reading material, copy page as markdown, Calendar quick actions, localhost jumper, color picker, fake form filler.",
-  "permissions": ["tabs", "storage", "alarms", "cookies", "activeTab", "webRequest", "webNavigation", "contentSettings", "scripting", "bookmarks", "history"],
+  "permissions": ["tabs", "storage", "cookies", "activeTab", "webRequest", "webNavigation", "contentSettings", "scripting", "bookmarks", "history"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

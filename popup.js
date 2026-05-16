@@ -48,133 +48,11 @@ chrome.storage.local.get(["last_tab"], (data) => {
 });
 
 // ═══════════════════════════════════
-//  Tab Cleaner
+//  Shared helpers
+//  (Tab Cleaner was removed — user keeps only required tabs anyway.)
 // ═══════════════════════════════════
-const enabledEl = document.getElementById("enabled");
-const timeoutEl = document.getElementById("timeout");
-const hostInput = document.getElementById("hostInput");
-const addBtn = document.getElementById("addBtn");
-const listEl = document.getElementById("list");
 
-chrome.storage.local.get(["enabled", "timeoutMin", "exclusions"], (data) => {
-  enabledEl.checked = data.enabled !== false;
-  timeoutEl.value = data.timeoutMin || 5;
-  renderExclusionList(data.exclusions || []);
-});
-
-enabledEl.addEventListener("change", () => {
-  log("tabcleaner.enabled", { enabled: enabledEl.checked });
-  chrome.storage.local.set({ enabled: enabledEl.checked });
-  notify("Auto-close " + (enabledEl.checked ? "enabled" : "disabled"), "ok");
-});
-
-timeoutEl.addEventListener("change", () => {
-  const val = Math.max(1, Math.min(1440, parseInt(timeoutEl.value) || 5));
-  timeoutEl.value = val;
-  log("tabcleaner.timeout", { minutes: val });
-  chrome.storage.local.set({ timeoutMin: val });
-  notify("Timeout: " + val + " min", "ok");
-});
-
-function addHost() {
-  let host = hostInput.value.trim().toLowerCase();
-  if (!host) { notify("Enter a host first", "err"); return; }
-  host = host.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-  log("tabcleaner.addHost", { host });
-  chrome.storage.local.get(["exclusions"], (data) => {
-    const exclusions = data.exclusions || [];
-    if (exclusions.includes(host)) {
-      hostInput.value = "";
-      notify("Already excluded: " + host, "info");
-      return;
-    }
-    exclusions.push(host);
-    chrome.storage.local.set({ exclusions }, () => {
-      hostInput.value = "";
-      renderExclusionList(exclusions);
-      notifyOk("Excluded: " + host);
-    });
-  });
-}
-
-addBtn.addEventListener("click", () => {
-  log("tabcleaner.addClick");
-  addHost(); // addHost() emits its own notify() based on outcome
-  // no-notify: outcome notification fires inside addHost()
-});
-hostInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addHost(); });
-
-function removeHost(host) {
-  log("tabcleaner.removeHost", { host });
-  chrome.storage.local.get(["exclusions"], (data) => {
-    const exclusions = (data.exclusions || []).filter((h) => h !== host);
-    chrome.storage.local.set({ exclusions }, () => {
-      renderExclusionList(exclusions);
-      notifyOk("Removed: " + host);
-    });
-  });
-}
-
-function renderExclusionList(exclusions) {
-  if (!exclusions.length) {
-    listEl.innerHTML = '<div class="empty">No exclusions — all tabs can be closed</div>'; // safe-html: literal HTML, no interpolation
-    return;
-  }
-  listEl.innerHTML = exclusions // safe-html: every interpolation routed through esc()/escA()
-    .map((h) => `<div class="item"><span>${esc(h)}</span><button data-host="${escA(h)}">&times;</button></div>`)
-    .join("");
-  listEl.querySelectorAll("button[data-host]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      log("tabcleaner.removeClick", { host: btn.dataset.host });
-      removeHost(btn.dataset.host);
-      // no-notify: removeHost() fires its own success notify
-    });
-  });
-}
-
-// ── Closed Tabs History ──
-const closedSection = document.getElementById("closedSection");
-
-function loadClosedTabs() {
-  chrome.storage.local.get(["closed_tabs"], (data) => {
-    const closed = data.closed_tabs || [];
-    if (!closed.length) {
-      closedSection.innerHTML = ""; // safe-html: empty string clears the element
-      return;
-    }
-    // safe-html: every interpolation routed through esc()/escA()
-    closedSection.innerHTML = `
-      <div class="closed-header">
-        <h2>Recently Closed</h2>
-        <button id="clearClosed">Clear</button>
-      </div>
-    ` + closed.map((t, i) => `
-      <div class="closed-item" data-url="${escA(t.url)}" data-idx="${i}">
-        ${t.favIconUrl ? `<img class="favicon" src="${escA(t.favIconUrl)}" onerror="this.style.display='none'">` : '<div class="favicon"></div>'}
-        <span class="closed-title" title="${escA(t.url)}">${esc(t.title)}</span>
-        <span class="closed-time">${timeAgo(t.time)}</span>
-        <button class="reopen" title="Re-open">↗</button>
-      </div>
-    `).join("");
-
-    document.getElementById("clearClosed").addEventListener("click", () => {
-      log("tabcleaner.clearClosed");
-      chrome.storage.local.remove("closed_tabs", () => {
-        loadClosedTabs();
-        notifyOk("Cleared closed tabs history");
-      });
-    });
-
-    closedSection.querySelectorAll(".closed-item").forEach((item) => {
-      item.addEventListener("click", () => {
-        log("tabcleaner.reopen", { url: item.dataset.url });
-        notify("Reopening tab…", "info");
-        chrome.tabs.create({ url: item.dataset.url });
-      });
-    });
-  });
-}
-
+// Shared helper — used by Localhost list to show relative timestamps.
 function timeAgo(ts) {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
@@ -184,8 +62,6 @@ function timeAgo(ts) {
   if (hrs < 24) return hrs + "h ago";
   return Math.floor(hrs / 24) + "d ago";
 }
-
-loadClosedTabs();
 
 // ═══════════════════════════════════
 //  Cookie Editor
@@ -1052,7 +928,7 @@ document.getElementById("qbReading").addEventListener("click", async (e) => {
     if (!chrome.bookmarks) {
       logError("quick.reading.permissionMissing");
       setQuickStatus("Bookmarks permission missing", "err");
-      notifyErr("Bookmarks permission not granted — remove extension at chrome://extensions and load it again");
+      notifyErr("Bookmarks permission not granted — reload at chrome://extensions and reopen this popup");
       return;
     }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1234,8 +1110,14 @@ document.getElementById("qbPickColor").addEventListener("click", async (e) => {
     }
     setQuickStatus("Click anywhere on the page…", "ok");
     notify("Click anywhere on the page…", "info");
+    // Run in MAIN world: EyeDropper is a window-bound web API and is NOT
+    // exposed in chrome.scripting's default ISOLATED world. Empirically the
+    // isolated `window` object lacks the EyeDropper constructor even when the
+    // browser supports it, so `typeof window.EyeDropper` came back undefined
+    // and our "Chrome 95+" message fired on modern Chrome — wrong diagnosis.
     const res = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
+      world: "MAIN",
       func: pickColorInPage,
     });
     const r = res && res[0] && res[0].result;
@@ -1255,10 +1137,15 @@ document.getElementById("qbPickColor").addEventListener("click", async (e) => {
   }
 });
 
-// Runs in page context. EyeDropper API is Chrome 95+.
+// Runs in page MAIN world. EyeDropper API requires Chrome 95+ AND a secure
+// context AND user activation (the popup click propagates).
 async function pickColorInPage() {
   if (typeof window.EyeDropper !== "function") {
-    return { error: "EyeDropper requires Chrome 95+" };
+    // Concrete diagnostic — return what we actually see in this page context.
+    const m = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1];
+    return {
+      error: `EyeDropper not exposed in this page (Chrome ${m || "?"}, secure=${window.isSecureContext}, top=${window.top === window})`,
+    };
   }
   try {
     const eye = new window.EyeDropper();
@@ -1283,9 +1170,15 @@ async function pickColorInPage() {
   }
 }
 
+// Fill Form: two-stage. First click previews (read-only DOM scan in the page),
+// shows the planned fills in a modal, and only fills after the user clicks
+// "Fill Now". Cancel / backdrop click discards.
+let fillFormPendingTabId = null;
+const fillModalEl = document.getElementById("fillFormModal");
+
 document.getElementById("qbFillForm").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
-  log("quick.fillForm.click");
+  log("quick.fillForm.preview.click");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.id) {
@@ -1300,24 +1193,183 @@ document.getElementById("qbFillForm").addEventListener("click", async (e) => {
     }
     const res = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
+      func: previewFormFillsInPage,
+    });
+    // Aggregate plans across frames
+    const plan = (res || []).flatMap((r) => (r && r.result && r.result.plan) ? r.result.plan : []);
+    logInfo("quick.fillForm.preview.result", { fields: plan.length, frames: (res || []).length });
+    if (!plan.length) {
+      setQuickStatus("No fillable fields found", "err");
+      notify("No fillable fields found", "info");
+      return;
+    }
+    fillFormPendingTabId = tab.id;
+    showFillFormModal(plan);
+    flashButton(btn);
+    notify(`Preview ready — ${plan.length} field${plan.length === 1 ? "" : "s"}`, "info");
+  } catch (err) {
+    logError("quick.fillForm.preview.fail", { error: err.message });
+    setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Fill preview failed: " + (err.message || "unknown"));
+  }
+});
+
+function showFillFormModal(plan) {
+  document.getElementById("fillPreviewSummary").textContent =
+    `Will fill ${plan.length} field${plan.length === 1 ? "" : "s"}. Random values are re-generated when you click Fill Now.`;
+  // safe-html: every interpolation routed through esc()
+  document.getElementById("fillPreviewList").innerHTML = plan.map((p) => `
+    <div class="fill-preview-item">
+      <span class="fp-label" title="${escA(p.label)}">${esc(p.label)}</span>
+      <span class="fp-type">${esc(p.type)}</span>
+      <span class="fp-arrow">→</span>
+      <span class="fp-value">${esc(p.preview)}</span>
+    </div>
+  `).join("");
+  fillModalEl.classList.add("show");
+}
+
+document.getElementById("fillCancel").addEventListener("click", () => {
+  log("quick.fillForm.cancel");
+  fillModalEl.classList.remove("show");
+  fillFormPendingTabId = null;
+  notify("Cancelled", "info");
+});
+
+fillModalEl.addEventListener("click", (e) => {
+  if (e.target === fillModalEl) {
+    log("quick.fillForm.dismiss");
+    fillModalEl.classList.remove("show");
+    fillFormPendingTabId = null;
+    // no-notify: backdrop click just closes the modal — disappearing is the feedback
+  }
+});
+
+document.getElementById("fillConfirm").addEventListener("click", async () => {
+  log("quick.fillForm.confirm.click");
+  fillModalEl.classList.remove("show");
+  const tabId = fillFormPendingTabId;
+  fillFormPendingTabId = null;
+  if (tabId == null) {
+    notifyErr("No pending fill — try again");
+    return;
+  }
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
       func: fillFormsInPage,
     });
     const total = (res || []).reduce((acc, r) => acc + ((r && r.result && r.result.filled) || 0), 0);
-    logInfo("quick.fillForm.result", { totalFilled: total, frames: (res || []).length });
+    logInfo("quick.fillForm.confirm.result", { totalFilled: total, frames: (res || []).length });
     if (total > 0) {
       setQuickStatus(`Filled ${total} field${total === 1 ? "" : "s"}`, "ok");
-      flashButton(btn);
       notifyOk(`Filled ${total} field${total === 1 ? "" : "s"}`);
     } else {
-      setQuickStatus("No fillable fields found", "err");
-      notify("No fillable fields found", "info");
+      setQuickStatus("No fields were filled", "err");
+      notify("No fields were filled (DOM may have changed)", "info");
     }
   } catch (err) {
-    logError("quick.fillForm.fail", { error: err.message });
-    setQuickStatus(err.message || "Failed", "err");
+    logError("quick.fillForm.confirm.fail", { error: err.message });
     notifyErr("Fill failed: " + (err.message || "unknown"));
   }
 });
+
+// Runs in page context. Read-only DOM scan — returns the plan without mutating.
+function previewFormFillsInPage() {
+  function elLabel(el) {
+    const raw = (
+      el.getAttribute("aria-label")
+      || el.placeholder
+      || el.name
+      || el.id
+      || (el.labels && el.labels[0] && el.labels[0].textContent)
+      || el.tagName.toLowerCase()
+    );
+    return String(raw || "").trim().replace(/\s+/g, " ").slice(0, 50);
+  }
+  function classify(el) {
+    const blob = (
+      (el.name || "") + " " +
+      (el.id || "") + " " +
+      (el.placeholder || "") + " " +
+      (el.getAttribute("aria-label") || "") + " " +
+      (el.autocomplete || "")
+    ).toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    if (type === "email" || /e-?mail/.test(blob)) return "email";
+    if (type === "tel" || /phone|mobile|tel\b/.test(blob)) return "phone";
+    if (type === "url" || /\burl\b|website/.test(blob)) return "url";
+    if (type === "password") return "password";
+    if (type === "number") return "number";
+    if (type === "date") return "date";
+    if (type === "time") return "time";
+    if (type === "datetime-local") return "datetime";
+    if (/first.?name|fname|given/.test(blob)) return "firstName";
+    if (/last.?name|lname|surname|family/.test(blob)) return "lastName";
+    if (/full.?name|^name$|your.?name|display.?name/.test(blob)) return "fullName";
+    if (/address|street/.test(blob)) return "address";
+    if (/city|town/.test(blob)) return "city";
+    if (/state|province|region/.test(blob)) return "state";
+    if (/zip|postal/.test(blob)) return "zip";
+    if (/country/.test(blob)) return "country";
+    if (/company|organi[sz]ation|business|employer/.test(blob)) return "company";
+    return null;
+  }
+  const KIND_LABELS = {
+    email: "random test email",
+    phone: "random US phone",
+    url: "https://example.com/…",
+    password: "Test1234!",
+    number: "random number",
+    date: "today",
+    time: "12:30",
+    datetime: "today, 12:30",
+    firstName: "random first name",
+    lastName: "random last name",
+    fullName: "random full name",
+    address: "random street address",
+    city: "random city",
+    state: "random state code",
+    zip: "random ZIP",
+    country: "USA",
+    company: "random company",
+    lorem: "lorem ipsum",
+    word: "random word",
+  };
+
+  const plan = [];
+  for (const el of document.querySelectorAll("input, textarea, select")) {
+    if (el.disabled || el.readOnly) continue;
+    const type = (el.type || "").toLowerCase();
+    if (["hidden", "submit", "button", "file", "image", "reset"].includes(type)) continue;
+    if (!(el instanceof HTMLSelectElement) && el.offsetParent === null && type !== "radio" && type !== "checkbox") continue;
+
+    let kind, preview;
+    if (el instanceof HTMLSelectElement) {
+      const opts = Array.from(el.options).filter((o) => o.value && !o.disabled);
+      if (!opts.length) continue;
+      kind = "select";
+      preview = `random option (${opts.length} available)`;
+    } else if (type === "checkbox") {
+      if (el.checked) continue;
+      kind = "checkbox";
+      preview = "check";
+    } else if (type === "radio") {
+      if (el.name && document.querySelector(`input[type="radio"][name="${CSS.escape(el.name)}"]:checked`)) continue;
+      kind = "radio";
+      preview = "select first in group";
+    } else {
+      kind = classify(el) || (el.tagName === "TEXTAREA" ? "lorem" : type === "number" ? "number" : "word");
+      preview = KIND_LABELS[kind] || kind;
+    }
+    plan.push({
+      label: elLabel(el),
+      type: el.tagName.toLowerCase() + (type ? `[${type}]` : ""),
+      preview,
+    });
+  }
+  return { plan };
+}
 
 // Runs in page context.
 function fillFormsInPage() {
@@ -1487,16 +1539,78 @@ document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
   }
 });
 
-document.getElementById("qbCalToday").addEventListener("click", async (e) => {
-  log("quick.calToday.click");
+// Keys we exclude from export — browsing data (closed_tabs) is privacy-sensitive
+// even when the user initiates the export; internal sentinels (sl_*) should be
+// regenerated locally, not transplanted.
+function isExportableKey(k) {
+  if (k === "closed_tabs") return false;
+  if (k.startsWith("sl_")) return false;
+  return true;
+}
+
+document.getElementById("qbExportSettings").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  log("quick.exportSettings.click");
   try {
-    await chrome.tabs.create({ url: "https://calendar.google.com/calendar/u/0/r/day" });
-    flashButton(e.currentTarget);
-    notifyOk("Opened today's Calendar");
+    const all = await chrome.storage.local.get(null);
+    const exportable = {};
+    for (const [k, v] of Object.entries(all)) {
+      if (isExportableKey(k)) exportable[k] = v;
+    }
+    const payload = {
+      _superlevels_export: 1,
+      _exported_at: new Date().toISOString(),
+      _extension_version: chrome.runtime.getManifest().version,
+      data: exportable,
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `superlevels-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logInfo("quick.exportSettings.done", { keys: Object.keys(exportable).length });
+    flashButton(btn);
+    notifyOk(`Exported ${Object.keys(exportable).length} settings`);
   } catch (err) {
-    logError("quick.calToday.fail", { error: err.message });
-    setQuickStatus(err.message || "Failed", "err");
-    notifyErr("Calendar open failed: " + (err.message || "unknown"));
+    logError("quick.exportSettings.fail", { error: err.message });
+    notifyErr("Export failed: " + (err.message || "unknown"));
+  }
+});
+
+const importFile = document.getElementById("qbImportFile");
+document.getElementById("qbImportSettings").addEventListener("click", (e) => {
+  log("quick.importSettings.click");
+  notify("Choose an exported JSON file…", "info");
+  importFile.click();
+  // no-notify: file picker triggers — notify already fired above
+});
+
+importFile.addEventListener("change", async (e) => {
+  log("quick.importSettings.fileChosen", { name: e.target.files[0] && e.target.files[0].name });
+  const file = e.target.files[0];
+  if (!file) { notify("No file chosen", "info"); return; }
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if (!parsed || parsed._superlevels_export !== 1 || typeof parsed.data !== "object") {
+      throw new Error("Not a SuperLevels settings export (missing _superlevels_export marker).");
+    }
+    // Merge — never wipe keys that aren't in the import.
+    const toSet = {};
+    for (const [k, v] of Object.entries(parsed.data)) {
+      if (isExportableKey(k)) toSet[k] = v;
+    }
+    await chrome.storage.local.set(toSet);
+    logInfo("quick.importSettings.applied", { keys: Object.keys(toSet).length, exportedAt: parsed._exported_at });
+    notifyOk(`Imported ${Object.keys(toSet).length} settings (merged)`);
+  } catch (err) {
+    logError("quick.importSettings.fail", { error: err.message });
+    notifyErr("Import failed: " + (err.message || "invalid file"));
+  } finally {
+    importFile.value = ""; // allow re-selecting the same file
   }
 });
 
@@ -1504,14 +1618,27 @@ document.getElementById("qbCalToday").addEventListener("click", async (e) => {
 //  Localhost Port Jumper
 // ═══════════════════════════════════
 const localhostListEl = document.getElementById("localhostList");
+const lhSearchEl = document.getElementById("lhSearch");
+const lhCountEl = document.getElementById("lhCount");
+
+// Cache of the full localhost-grouped list. Filtering operates on this in
+// memory — avoids re-querying chrome.history on every keystroke.
+let localhostCache = [];
+
 document.getElementById("lhRefresh").addEventListener("click", () => {
   log("localhost.refresh");
   notify("Refreshing localhost history…", "info");
   loadLocalhost();
 });
 
+lhSearchEl.addEventListener("input", () => {
+  logInfo("localhost.filter", { query: lhSearchEl.value });
+  renderLocalhostList(lhSearchEl.value);
+});
+
 async function loadLocalhost() {
   localhostListEl.innerHTML = '<div class="empty">Loading...</div>'; // safe-html: literal HTML
+  lhCountEl.textContent = "";
   try {
     if (!chrome.history || !chrome.history.search) {
       localhostListEl.innerHTML = '<div class="empty">History API unavailable</div>'; // safe-html: literal HTML
@@ -1562,36 +1689,63 @@ async function loadLocalhost() {
     for (const r of results) ingest(r);
     for (const r of results2) ingest(r);
 
-    const sorted = Array.from(grouped.values())
+    localhostCache = Array.from(grouped.values())
       .sort((a, b) => b.lastVisit - a.lastVisit)
-      .slice(0, 30);
+      .slice(0, 60); // cache up to 60; usually 5–20 in practice
 
-    if (!sorted.length) {
-      localhostListEl.innerHTML = '<div class="empty">No recent localhost visits</div>'; // safe-html: literal HTML
-      return;
-    }
-
-    // safe-html: every interpolation routed through esc()/escA()
-    localhostListEl.innerHTML = sorted.map((it) => `
-      <a class="localhost-item" href="${escA(it.url)}" data-url="${escA(it.url)}" title="${escA(it.url)}">
-        <span class="lh-protocol${it.protocol === "https" ? " https" : ""}">${esc(it.protocol)}</span>
-        <span class="lh-port">:${esc(it.port)}</span>
-        <span class="lh-path">${esc(it.path)}</span>
-        <span class="lh-time">${timeAgo(it.lastVisit)}</span>
-      </a>
-    `).join("");
-
-    localhostListEl.querySelectorAll(".localhost-item").forEach((a) => {
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        log("localhost.open", { url: a.dataset.url });
-        notify("Opening " + a.dataset.url, "info");
-        chrome.tabs.create({ url: a.dataset.url });
-      });
-    });
+    renderLocalhostList(lhSearchEl.value);
   } catch (err) {
     localhostListEl.innerHTML = `<div class="empty">${esc(err.message || "Failed to load")}</div>`; // safe-html: err.message routed through esc()
   }
+}
+
+function renderLocalhostList(query) {
+  const q = (query || "").trim().toLowerCase();
+  const filtered = q
+    ? localhostCache.filter((it) =>
+        (it.title || "").toLowerCase().includes(q)
+        || it.port.toLowerCase().includes(q)
+        || it.path.toLowerCase().includes(q))
+    : localhostCache;
+
+  if (!filtered.length) {
+    if (!localhostCache.length) {
+      localhostListEl.innerHTML = '<div class="empty">No recent localhost visits</div>'; // safe-html: literal HTML
+      lhCountEl.textContent = "";
+    } else {
+      localhostListEl.innerHTML = '<div class="empty">No matches</div>'; // safe-html: literal HTML
+      lhCountEl.textContent = `0 of ${localhostCache.length}`;
+    }
+    return;
+  }
+
+  lhCountEl.textContent = q
+    ? `${filtered.length} of ${localhostCache.length}`
+    : `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`;
+
+  // safe-html: every interpolation routed through esc()/escA()
+  localhostListEl.innerHTML = filtered.map((it) => `
+    <a class="localhost-item" href="${escA(it.url)}" data-url="${escA(it.url)}" title="${escA(it.url)}">
+      <span class="lh-port">:${esc(it.port)}</span>
+      <div class="lh-info">
+        <div class="lh-title${it.title ? "" : " empty"}">${esc(it.title || "(no title)")}</div>
+        <div class="lh-path-row">
+          <span class="lh-protocol${it.protocol === "https" ? " https" : ""}">${esc(it.protocol)}</span>
+          <span class="lh-path">${esc(it.path)}</span>
+        </div>
+      </div>
+      <span class="lh-time">${timeAgo(it.lastVisit)}</span>
+    </a>
+  `).join("");
+
+  localhostListEl.querySelectorAll(".localhost-item").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      log("localhost.open", { url: a.dataset.url });
+      notify("Opening " + a.dataset.url, "info");
+      chrome.tabs.create({ url: a.dataset.url });
+    });
+  });
 }
 
 // ═══════════════════════════════════

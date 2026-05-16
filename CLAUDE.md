@@ -13,7 +13,7 @@ This extension holds `<all_urls>` + cookies + history + bookmarks + scripting. *
 ## Non-obvious
 
 - **Content scripts run in hostile DOM.** Namespace injected elements with `sl-`; namespace storage keys with the feature name (`nfe_*`, `darkmode_*`).
-- **New manifest permissions need Remove + Reload, not just Reload.** Surface this at runtime when an API comes back `undefined` (see `popup.js` for missing `chrome.bookmarks`).
+- **New manifest permissions: Reload at `chrome://extensions` + close & reopen the popup.** The popup keeps stale `chrome` API references until reopened. Remove + Reinstall is last resort — and it wipes `chrome.storage.local`, so use the popup's Export Settings button first. Surface this at runtime when an API comes back `undefined` (see `popup.js` for missing `chrome.bookmarks`).
 - **Bug → gate.** When a static check could have caught a bug, copy the shape of `scripts/check-instrumentation.mjs` or `scripts/check-security.mjs` and wire into the Stop hook. This rule itself can't be enforced — that's why it's here.
 
 Behavioral rules (git etiquette, ratchet pattern, premature-gate caution) live in `~/.claude/projects/-home-artisan-code-chrome-extension-bundle/memory/`.
