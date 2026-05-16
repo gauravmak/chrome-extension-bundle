@@ -24,12 +24,12 @@
       flex-shrink: 0;
     }
     .nav button {
-      width: calc(100% / 7);
+      width: calc(100% / 8);
       padding: 9px 2px;
       background: none;
       border: none;
       color: #888;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
       cursor: pointer;
       border-bottom: 2px solid transparent;
@@ -712,6 +712,7 @@
     <button data-page="unhook">📺 YT Unhook</button>
     <button data-page="xunhook">𝕏 Unhook</button>
     <button data-page="xdim">𝕏 Dim</button>
+    <button data-page="nfe">🚫 Feeds</button>
     <button data-page="jsonformat">{} JSON</button>
     <button data-page="darkmode">🌙 Dark</button>
     <button data-page="nocookie">🚫 GDPR</button>
@@ -731,6 +732,20 @@
           <span class="qb-icon">📝</span>
           <span class="qb-label">Copy as Markdown</span>
           <span class="qb-hint">Article or selection</span>
+        </button>
+      </div>
+
+      <h2>Page tools</h2>
+      <div class="quick-grid">
+        <button class="quick-btn" id="qbPickColor">
+          <span class="qb-icon">🎨</span>
+          <span class="qb-label">Pick Color</span>
+          <span class="qb-hint">Eyedropper → clipboard</span>
+        </button>
+        <button class="quick-btn" id="qbFillForm">
+          <span class="qb-icon">🎲</span>
+          <span class="qb-label">Fill Form</span>
+          <span class="qb-hint">Fake test data</span>
         </button>
       </div>
 
@@ -937,6 +952,37 @@
 
       <div class="xdim-note" style="margin-top:10px">
         Removes X / Twitter distractions.<br>
+        Toggle off if a page breaks.
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ News Feed Eradicator Page ═══ -->
+  <div class="page" id="page-nfe">
+    <div class="page-body">
+      <div class="nocookie-big-toggle">
+        <div class="ncicon">🚫📰</div>
+        <label class="big-switch">
+          <input type="checkbox" id="nfeToggle">
+          <span class="big-slider"></span>
+        </label>
+        <div class="status off" id="nfeStatus">OFF</div>
+      </div>
+
+      <div class="nocookie-stats">
+        <b>Hides infinite feeds</b><br>
+        Removes the scrolling feed on these sites so you can use them on purpose:
+      </div>
+
+      <div class="unhook-features">
+        <div class="unhook-feature"><span class="check">✓</span> LinkedIn home feed</div>
+        <div class="unhook-feature"><span class="check">✓</span> X / Twitter home timeline</div>
+        <div class="unhook-feature"><span class="check">✓</span> Facebook news feed</div>
+        <div class="unhook-feature"><span class="check">✓</span> Reddit front-page posts</div>
+      </div>
+
+      <div class="xdim-note" style="margin-top:10px">
+        Search, profiles, and direct links still work.<br>
         Toggle off if a page breaks.
       </div>
     </div>

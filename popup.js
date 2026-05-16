@@ -19,6 +19,7 @@ function switchToPage(page) {
   if (page === "xunhook") loadXUnhook();
   if (page === "jsonformat") loadJsonFormat();
   if (page === "localhost") loadLocalhost();
+  if (page === "nfe") loadNFE();
   chrome.storage.local.set({ last_tab: page });
 }
 
@@ -767,6 +768,43 @@ xunhookToggle.addEventListener("change", async () => {
 });
 
 // ═══════════════════════════════════
+//  News Feed Eradicator
+// ═══════════════════════════════════
+const nfeToggle = document.getElementById("nfeToggle");
+const nfeStatus = document.getElementById("nfeStatus");
+
+async function loadNFE() {
+  const data = await chrome.storage.local.get(["nfe_enabled"]);
+  const enabled = data.nfe_enabled === true;
+  nfeToggle.checked = enabled;
+  updateNfeUI(enabled);
+}
+
+function updateNfeUI(on) {
+  nfeStatus.textContent = on ? "ON" : "OFF";
+  nfeStatus.className = "status " + (on ? "on" : "off");
+}
+
+nfeToggle.addEventListener("change", async () => {
+  const enabled = nfeToggle.checked;
+  updateNfeUI(enabled);
+  await chrome.storage.local.set({ nfe_enabled: enabled });
+  // Broadcast to any currently-open tab that has the content script.
+  const tabs = await chrome.tabs.query({
+    url: [
+      "*://*.linkedin.com/*",
+      "*://x.com/*", "*://twitter.com/*",
+      "*://mobile.x.com/*", "*://mobile.twitter.com/*",
+      "*://*.facebook.com/*",
+      "*://*.reddit.com/*",
+    ],
+  });
+  for (const t of tabs) {
+    chrome.tabs.sendMessage(t.id, { type: "nfe_toggle", enabled }).catch(() => {});
+  }
+});
+
+// ═══════════════════════════════════
 //  JavaScript Toggle
 // ═══════════════════════════════════
 const jsToggle = document.getElementById("jsToggle");
@@ -1081,6 +1119,215 @@ function extractMarkdownFromPage() {
   const body = toMd(root);
   const header = `# ${document.title || ""}\n\n${location.href}\n\n---\n\n`;
   return { md: header + body, source: "article" };
+}
+
+document.getElementById("qbPickColor").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
+      setQuickStatus("Can't pick on Chrome pages", "err");
+      return;
+    }
+    setQuickStatus("Click anywhere on the page…", "ok");
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: pickColorInPage,
+    });
+    const r = res && res[0] && res[0].result;
+    if (r && r.hex) {
+      setQuickStatus(`Picked ${r.hex} — copied`, "ok");
+      flashButton(btn);
+    } else if (r && r.error) {
+      setQuickStatus(r.error, "err");
+    }
+  } catch (err) {
+    setQuickStatus(err.message || "Failed", "err");
+  }
+});
+
+// Runs in page context. EyeDropper API is Chrome 95+.
+async function pickColorInPage() {
+  if (typeof window.EyeDropper !== "function") {
+    return { error: "EyeDropper requires Chrome 95+" };
+  }
+  try {
+    const eye = new window.EyeDropper();
+    const result = await eye.open();
+    try { await navigator.clipboard.writeText(result.sRGBHex); } catch (_) {}
+    const toast = document.createElement("div");
+    toast.textContent = `Copied ${result.sRGBHex}`;
+    toast.style.cssText =
+      "position:fixed;top:20px;right:20px;background:#1a1a2e;color:#fff;" +
+      "padding:12px 16px;border-radius:8px;border:1px solid #e94560;" +
+      "font:14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
+      "z-index:2147483647;box-shadow:0 4px 20px rgba(0,0,0,0.4);" +
+      "display:flex;align-items:center;gap:10px;";
+    const swatch = document.createElement("span");
+    swatch.style.cssText = `display:inline-block;width:16px;height:16px;border-radius:3px;background:${result.sRGBHex};border:1px solid #fff;`;
+    toast.prepend(swatch);
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+    return { hex: result.sRGBHex };
+  } catch (e) {
+    return { error: (e && e.message) || "Cancelled" };
+  }
+}
+
+document.getElementById("qbFillForm").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
+      setQuickStatus("Can't fill on Chrome pages", "err");
+      return;
+    }
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: fillFormsInPage,
+    });
+    const total = (res || []).reduce((acc, r) => acc + ((r && r.result && r.result.filled) || 0), 0);
+    if (total > 0) {
+      setQuickStatus(`Filled ${total} field${total === 1 ? "" : "s"}`, "ok");
+      flashButton(btn);
+    } else {
+      setQuickStatus("No fillable fields found", "err");
+    }
+  } catch (err) {
+    setQuickStatus(err.message || "Failed", "err");
+  }
+});
+
+// Runs in page context.
+function fillFormsInPage() {
+  const ri = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const rstr = (n) => Math.random().toString(36).slice(2, 2 + (n || 6));
+  const firstNames = ["Alex", "Jordan", "Sam", "Taylor", "Casey", "Morgan", "Riley", "Jamie", "Avery", "Quinn"];
+  const lastNames = ["Smith", "Johnson", "Patel", "Garcia", "Chen", "Khan", "Brown", "Davis", "Miller", "Wilson"];
+  const cities = ["Austin", "Portland", "Seattle", "Denver", "Chicago", "Boston", "Miami", "Atlanta", "Phoenix", "Dallas"];
+  const states = ["TX", "OR", "WA", "CO", "IL", "MA", "FL", "GA", "AZ", "CA"];
+  const companies = ["Acme Corp", "Globex", "Initech", "Hooli", "Pied Piper", "Umbrella", "Stark", "Wayne"];
+  const streets = ["Main St", "Oak Ave", "Maple Rd", "Elm Way", "Pine Blvd", "Cedar Ln"];
+
+  const fakers = {
+    firstName: () => ri(firstNames),
+    lastName: () => ri(lastNames),
+    fullName: () => `${ri(firstNames)} ${ri(lastNames)}`,
+    email: () => `test+${rstr(6)}@example.com`,
+    phone: () => "+1" + String(Math.floor(2000000000 + Math.random() * 7999999999)),
+    address: () => `${Math.floor(Math.random() * 9990) + 10} ${ri(streets)}`,
+    city: () => ri(cities),
+    state: () => ri(states),
+    zip: () => String(Math.floor(Math.random() * 89999) + 10000),
+    country: () => "USA",
+    company: () => ri(companies),
+    url: () => "https://example.com/" + rstr(4),
+    password: () => "Test1234!",
+    date: () => new Date().toISOString().slice(0, 10),
+    time: () => "12:30",
+    datetime: () => new Date().toISOString().slice(0, 16),
+    lorem: () => "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    word: () => rstr(7),
+  };
+
+  function classify(el) {
+    const blob = (
+      (el.name || "") + " " +
+      (el.id || "") + " " +
+      (el.placeholder || "") + " " +
+      (el.getAttribute("aria-label") || "") + " " +
+      (el.autocomplete || "")
+    ).toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    if (type === "email" || /e-?mail/.test(blob)) return "email";
+    if (type === "tel" || /phone|mobile|tel\b/.test(blob)) return "phone";
+    if (type === "url" || /\burl\b|website/.test(blob)) return "url";
+    if (type === "password") return "password";
+    if (type === "number") return "number";
+    if (type === "date") return "date";
+    if (type === "time") return "time";
+    if (type === "datetime-local") return "datetime";
+    if (/first.?name|fname|given/.test(blob)) return "firstName";
+    if (/last.?name|lname|surname|family/.test(blob)) return "lastName";
+    if (/full.?name|^name$|your.?name|display.?name/.test(blob)) return "fullName";
+    if (/address|street/.test(blob)) return "address";
+    if (/city|town/.test(blob)) return "city";
+    if (/state|province|region/.test(blob)) return "state";
+    if (/zip|postal/.test(blob)) return "zip";
+    if (/country/.test(blob)) return "country";
+    if (/company|organi[sz]ation|business|employer/.test(blob)) return "company";
+    return null;
+  }
+
+  function setValue(el, val) {
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value");
+    if (setter && setter.set) setter.set.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  let filled = 0;
+  const nodes = document.querySelectorAll("input, textarea, select");
+  for (const el of nodes) {
+    if (el.disabled || el.readOnly) continue;
+    const type = (el.type || "").toLowerCase();
+    if (["hidden", "submit", "button", "file", "image", "reset"].includes(type)) continue;
+    // Skip not-rendered fields
+    if (!(el instanceof HTMLSelectElement) && el.offsetParent === null && el.type !== "radio" && el.type !== "checkbox") continue;
+
+    if (el instanceof HTMLSelectElement) {
+      const opts = Array.from(el.options).filter((o) => o.value && !o.disabled);
+      if (opts.length) {
+        el.value = ri(opts).value;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        filled++;
+      }
+      continue;
+    }
+    if (type === "checkbox") {
+      if (!el.checked) {
+        el.checked = true;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        filled++;
+      }
+      continue;
+    }
+    if (type === "radio") {
+      if (el.name) {
+        const groupSel = `input[type="radio"][name="${CSS.escape(el.name)}"]`;
+        if (document.querySelector(groupSel + ":checked")) continue;
+      }
+      el.checked = true;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      filled++;
+      continue;
+    }
+
+    const kind = classify(el)
+      || (el.tagName === "TEXTAREA" ? "lorem"
+        : type === "number" ? "number"
+        : "word");
+    let val;
+    if (kind === "number") {
+      const min = parseFloat(el.min);
+      const max = parseFloat(el.max);
+      const lo = isFinite(min) ? min : 1;
+      const hi = isFinite(max) ? max : 100;
+      val = String(Math.floor(lo + Math.random() * Math.max(1, hi - lo)));
+    } else {
+      val = (fakers[kind] || fakers.word)();
+    }
+    if (el.maxLength > 0 && val.length > el.maxLength) val = val.slice(0, el.maxLength);
+    setValue(el, val);
+    filled++;
+  }
+  return { filled };
 }
 
 document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
