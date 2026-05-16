@@ -540,123 +540,93 @@
       padding: 8px; line-height: 1.5;
     }
 
-    /* ── Music Recognizer ── */
-    .music-center {
+    /* ── Quick Actions ── */
+    .quick-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .quick-btn {
       display: flex; flex-direction: column;
-      align-items: center; padding: 20px 0 16px; gap: 8px;
-      border-radius: 16px; margin: 0 0 10px;
-      transition: background 0.4s, padding 0.4s;
-    }
-    .music-center.active {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      padding: 30px 0 20px;
-    }
-    .listen-btn {
-      width: 100px; height: 100px; border-radius: 50%;
-      border: none; background: #fff;
-      cursor: pointer; display: flex; align-items: center;
-      justify-content: center; transition: all 0.3s;
-      position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-    }
-    .listen-btn:hover { transform: scale(1.05); }
-    .listen-btn .mic-icon { display: block; }
-    .listen-btn .bars-icon { display: none; }
-    .listen-btn.recording .mic-icon { display: none; }
-    .listen-btn.recording .bars-icon { display: flex; }
-    .listen-btn.recording {
-      animation: pulse-ring 1.5s ease-out infinite;
-    }
-    /* Sound bars animation */
-    .sound-bars {
-      display: flex; align-items: center;
-      gap: 4px; height: 36px;
-    }
-    .sound-bars .bar {
-      width: 6px; border-radius: 3px;
-      background: #e94560;
-      animation: soundbar 1s ease-in-out infinite;
-    }
-    .sound-bars .bar:nth-child(1) { height: 24px; animation-delay: 0s; }
-    .sound-bars .bar:nth-child(2) { height: 36px; animation-delay: 0.15s; }
-    .sound-bars .bar:nth-child(3) { height: 28px; animation-delay: 0.3s; }
-    .sound-bars .bar:nth-child(4) { height: 36px; animation-delay: 0.45s; }
-    .sound-bars .bar:nth-child(5) { height: 20px; animation-delay: 0.6s; }
-    @keyframes soundbar {
-      0%, 100% { transform: scaleY(0.4); }
-      50% { transform: scaleY(1); }
-    }
-    @keyframes pulse-ring {
-      0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.4); }
-      70% { box-shadow: 0 0 0 16px rgba(255,255,255,0); }
-      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
-    }
-    .listen-label {
-      font-size: 15px; font-weight: 600; color: #888;
-      margin-top: 4px; transition: color 0.3s;
-    }
-    .music-center.active .listen-label { color: #fff; }
-    .listen-timer {
-      font-size: 24px; font-weight: 700;
-      font-variant-numeric: tabular-nums;
-      color: #e94560; min-height: 32px;
-      transition: color 0.3s;
-    }
-    .music-center.active .listen-timer { color: #fff; }
-    .music-result {
-      margin-top: 8px; width: 100%;
-    }
-    .music-result .song-card {
-      background: #16213e; border-radius: 10px;
-      padding: 14px; display: flex; gap: 12px;
-      align-items: center;
-    }
-    .song-card .art {
-      width: 56px; height: 56px; border-radius: 8px;
-      background: #0f3460; display: flex;
       align-items: center; justify-content: center;
-      font-size: 28px; flex-shrink: 0;
-      overflow: hidden;
+      gap: 6px;
+      padding: 18px 8px;
+      background: #16213e;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      color: #e0e0e0;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
     }
-    .song-card .art img {
-      width: 100%; height: 100%; object-fit: cover;
+    .quick-btn:hover {
+      background: #1b2a4a;
+      border-color: #e94560;
+      transform: translateY(-1px);
     }
-    .song-card .info { flex: 1; min-width: 0; }
-    .song-card .title {
-      font-size: 14px; font-weight: 600; color: #fff;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .quick-btn:focus { outline: none; }
+    .quick-btn.flash {
+      background: #1a3c2a;
+      border-color: #2a8a4a;
     }
-    .song-card .artist {
-      font-size: 12px; color: #aaa; margin-top: 2px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .quick-btn .qb-icon {
+      font-size: 24px; line-height: 1;
     }
-    .song-card .album {
-      font-size: 11px; color: #666; margin-top: 2px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .quick-btn .qb-label {
+      font-size: 12px; font-weight: 600;
     }
-    .music-error {
-      text-align: center; padding: 12px;
-      background: #2a1525; border-radius: 8px;
-      font-size: 12px; color: #e94560;
+    .quick-btn .qb-hint {
+      font-size: 10px; color: #777;
     }
-    .music-history {
-      margin-top: 14px;
+    .quick-section h2 { margin-top: 6px; }
+    .quick-status {
+      font-size: 11px; color: #555;
+      text-align: center; padding: 6px;
+      min-height: 16px;
     }
-    .music-history h2 { margin-bottom: 6px; }
-    .history-item {
+    .quick-status.ok { color: #4caf50; }
+    .quick-status.err { color: #e94560; }
+
+    /* ── Localhost Jumper ── */
+    .localhost-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .localhost-header .lh-refresh {
+      background: none; border: none; color: #e94560;
+      font-size: 11px; cursor: pointer;
+    }
+    .localhost-item {
       display: flex; align-items: center; gap: 10px;
-      padding: 8px 10px; background: #16213e;
+      padding: 8px 12px; background: #16213e;
       border-radius: 6px; margin-bottom: 4px;
+      cursor: pointer; transition: background 0.15s;
+      text-decoration: none; color: inherit;
     }
-    .history-item .h-title {
-      font-size: 12px; font-weight: 500; color: #ddd;
-      flex: 1; min-width: 0;
+    .localhost-item:hover { background: #1b2a4a; }
+    .localhost-item .lh-port {
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 13px; font-weight: 600;
+      color: #6ab0f3; flex-shrink: 0;
+      min-width: 56px;
+    }
+    .localhost-item .lh-path {
+      flex: 1; font-size: 12px; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      color: #ddd;
+      font-family: 'SF Mono', 'Consolas', monospace;
     }
-    .history-item .h-artist {
-      font-size: 11px; color: #888;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      max-width: 100px;
+    .localhost-item .lh-time {
+      font-size: 10px; color: #555; flex-shrink: 0;
     }
+    .lh-protocol {
+      font-size: 9px; padding: 1px 5px;
+      border-radius: 3px; background: #0f3460;
+      color: #888; flex-shrink: 0;
+      font-family: 'SF Mono', 'Consolas', monospace;
+    }
+    .lh-protocol.https { color: #6af38a; background: #1a3c2a; }
 
     /* ── Picture-in-Picture ── */
     .pip-center {
@@ -731,23 +701,72 @@
 
   <!-- Nav -->
   <div class="nav">
-    <button class="active" data-page="tabcleaner">🚮 Tabs</button>
+    <button class="active" data-page="quick">🚀 Quick</button>
+    <button data-page="localhost">💻 Local</button>
     <button data-page="cookies">🍪 Cookies</button>
-    <button data-page="redirects">🔀 Redirects</button>
-    <button data-page="darkmode">🌙 Dark</button>
-    <button data-page="xdim">𝕏 Dim</button>
-    <button data-page="xunhook">𝕏 Unhook</button>
-    <button data-page="jstoggle">⚡ JS</button>
-    <button data-page="nocookie">🚫 GDPR</button>
     <button data-page="livecss">🎨 CSS</button>
-    <button data-page="unhook">📺 YT Unhook</button>
-    <button data-page="music">🎵 Music</button>
+    <button data-page="redirects">🔀 Redirects</button>
+    <button data-page="jstoggle">⚡ JS</button>
+    <button data-page="tabcleaner">🚮 Tabs</button>
     <button data-page="pip">🖼 PiP</button>
+    <button data-page="unhook">📺 YT Unhook</button>
+    <button data-page="xunhook">𝕏 Unhook</button>
+    <button data-page="xdim">𝕏 Dim</button>
     <button data-page="jsonformat">{} JSON</button>
+    <button data-page="darkmode">🌙 Dark</button>
+    <button data-page="nocookie">🚫 GDPR</button>
+  </div>
+
+  <!-- ═══ Quick Actions Page ═══ -->
+  <div class="page active" id="page-quick">
+    <div class="page-body">
+      <h2>Save current page</h2>
+      <div class="quick-grid">
+        <button class="quick-btn" id="qbReading">
+          <span class="qb-icon">📚</span>
+          <span class="qb-label">Reading Material</span>
+          <span class="qb-hint">Bookmark to folder</span>
+        </button>
+        <button class="quick-btn" id="qbMarkdown">
+          <span class="qb-icon">📝</span>
+          <span class="qb-label">Copy as Markdown</span>
+          <span class="qb-hint">Article or selection</span>
+        </button>
+      </div>
+
+      <h2>Google Calendar</h2>
+      <div class="quick-grid">
+        <button class="quick-btn" id="qbCalEvent">
+          <span class="qb-icon">📅</span>
+          <span class="qb-label">New Event</span>
+          <span class="qb-hint">From selection</span>
+        </button>
+        <button class="quick-btn" id="qbCalToday">
+          <span class="qb-icon">🗓️</span>
+          <span class="qb-label">Today</span>
+          <span class="qb-hint">Open day view</span>
+        </button>
+      </div>
+
+      <div class="quick-status" id="quickStatus"></div>
+    </div>
+  </div>
+
+  <!-- ═══ Localhost Jumper Page ═══ -->
+  <div class="page" id="page-localhost">
+    <div class="page-body">
+      <div class="localhost-header">
+        <h2>Recent Localhost</h2>
+        <button class="lh-refresh" id="lhRefresh">↻ Refresh</button>
+      </div>
+      <div id="localhostList">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ Tab Cleaner Page ═══ -->
-  <div class="page active" id="page-tabcleaner">
+  <div class="page" id="page-tabcleaner">
     <div class="page-body">
       <div class="toggle-row">
         <label>Auto-close enabled</label>
@@ -1007,48 +1026,6 @@
       <div class="js-note">
         Disable JavaScript for the current site.<br>
         The page will reload when toggled.
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ Music Recognizer Page ═══ -->
-  <div class="page" id="page-music">
-    <div class="page-body">
-      <div class="music-center">
-        <button class="listen-btn" id="listenBtn">
-          <span class="mic-icon">
-            <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#e94560" stroke-width="2" stroke-linecap="round">
-              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
-              <path d="M19 10v2a7 7 0 01-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          </span>
-          <span class="bars-icon">
-            <div class="sound-bars">
-              <div class="bar"></div>
-              <div class="bar"></div>
-              <div class="bar"></div>
-              <div class="bar"></div>
-              <div class="bar"></div>
-            </div>
-          </span>
-        </button>
-        <div class="listen-timer" id="listenTimer"></div>
-        <div class="listen-label" id="listenLabel">Tap to listen</div>
-        <button id="acrSettingsBtn" style="background:none;border:none;color:#555;font-size:16px;cursor:pointer;margin-top:4px;" title="API Settings">⚙️</button>
-      </div>
-      <div class="music-result" id="musicResult"></div>
-      <div class="music-history" id="musicHistory"></div>
-      <div class="dark-section" id="acrConfig" style="margin-top:14px;display:none">
-        <a href="https://www.acrcloud.com/sign-up/" target="_blank" style="display:block;text-align:center;padding:8px;margin-bottom:10px;background:#2a1525;border:1px solid #e94560;border-radius:6px;color:#e94560;font-size:12px;font-weight:600;text-decoration:none;">Sign up for free ACRCloud API keys →</a>
-        <label>ACRCloud Host</label>
-        <input type="text" id="acrHost" placeholder="identify-eu-west-1.acrcloud.com" style="width:100%;padding:6px 8px;background:#0f1e3d;border:1px solid #2a2a4a;border-radius:4px;color:#ddd;font-size:12px;margin-bottom:6px;">
-        <label>Access Key</label>
-        <input type="text" id="acrKey" placeholder="your access key" style="width:100%;padding:6px 8px;background:#0f1e3d;border:1px solid #2a2a4a;border-radius:4px;color:#ddd;font-size:12px;margin-bottom:6px;">
-        <label>Access Secret</label>
-        <input type="password" id="acrSecret" placeholder="your access secret" style="width:100%;padding:6px 8px;background:#0f1e3d;border:1px solid #2a2a4a;border-radius:4px;color:#ddd;font-size:12px;margin-bottom:6px;">
-        <button class="btn-save" id="acrSaveBtn" style="margin-top:4px;padding:6px 14px;font-size:12px;">Save</button>
       </div>
     </div>
   </div>

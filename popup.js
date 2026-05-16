@@ -18,7 +18,7 @@ function switchToPage(page) {
   if (page === "unhook") loadUnhook();
   if (page === "xunhook") loadXUnhook();
   if (page === "jsonformat") loadJsonFormat();
-  if (page === "music") { loadMusicHistory(); loadAcrFields(); }
+  if (page === "localhost") loadLocalhost();
   chrome.storage.local.set({ last_tab: page });
 }
 
@@ -822,238 +822,6 @@ jsToggle.addEventListener("change", async () => {
 });
 
 // ═══════════════════════════════════
-//  Music Recognizer (ACRCloud)
-// ═══════════════════════════════════
-// ACRCloud credentials — loaded from storage so they're not hardcoded in source
-let ACR_HOST = "";
-let ACR_KEY = "";
-let ACR_SECRET = "";
-
-// Load saved creds (set defaults on first run)
-chrome.storage.local.get(["acr_host", "acr_key", "acr_secret"], (data) => {
-  ACR_HOST = data.acr_host || "identify-eu-west-1.acrcloud.com";
-  ACR_KEY = data.acr_key || "";
-  ACR_SECRET = data.acr_secret || "";
-});
-
-const listenBtn = document.getElementById("listenBtn");
-const listenTimer = document.getElementById("listenTimer");
-const listenLabel = document.getElementById("listenLabel");
-const musicResult = document.getElementById("musicResult");
-const musicHistoryEl = document.getElementById("musicHistory");
-let isRecording = false;
-
-listenBtn.addEventListener("click", () => {
-  if (isRecording) return;
-  startListening();
-});
-
-async function startListening() {
-  if (!ACR_KEY || !ACR_SECRET) {
-    musicResult.innerHTML = `<div class="music-error">ACRCloud credentials not set. <a href="https://www.acrcloud.com/sign-up/" target="_blank" style="color:#6a9fd8;">Sign up free</a> and add them below.</div>`;
-    showAcrConfig();
-    return;
-  }
-  isRecording = true;
-  listenBtn.classList.add("recording");
-  listenBtn.closest(".music-center").classList.add("active");
-  listenLabel.textContent = "Listening...";
-  musicResult.innerHTML = "";
-
-  let seconds = 10;
-  listenTimer.textContent = seconds + "s";
-  const interval = setInterval(() => {
-    seconds--;
-    listenTimer.textContent = seconds + "s";
-    if (seconds <= 0) clearInterval(interval);
-  }, 1000);
-
-  try {
-    const stream = await new Promise((resolve, reject) => {
-      chrome.tabCapture.capture({ audio: true, video: false }, (s) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        if (!s) return reject(new Error("No audio stream"));
-        resolve(s);
-      });
-    });
-
-    // Pipe audio back to speakers so user still hears it
-    const audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-    source.connect(audioCtx.destination);
-
-    // Record 5 seconds
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    const chunks = [];
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-
-    const blob = await new Promise((resolve) => {
-      recorder.onstop = () => {
-        source.disconnect();
-        audioCtx.close();
-        stream.getTracks().forEach((t) => t.stop());
-        resolve(new Blob(chunks, { type: "audio/webm" }));
-      };
-      recorder.start();
-      setTimeout(() => recorder.stop(), 10000);
-    });
-
-    clearInterval(interval);
-    listenTimer.textContent = "";
-    listenLabel.textContent = "Identifying...";
-
-    const result = await identifyWithACR(blob);
-    showResult(result);
-  } catch (err) {
-    clearInterval(interval);
-    musicResult.innerHTML = `<div class="music-error">${esc(err.message)}</div>`;
-    showAcrConfig();
-  } finally {
-    isRecording = false;
-    listenBtn.classList.remove("recording");
-    listenBtn.closest(".music-center").classList.remove("active");
-    listenTimer.textContent = "";
-    listenLabel.textContent = "Tap to listen";
-  }
-}
-
-async function hmacSha1(key, message) {
-  const enc = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw", enc.encode(key), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(message));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)));
-}
-
-async function identifyWithACR(audioBlob) {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const stringToSign = `POST\n/v1/identify\n${ACR_KEY}\naudio\n1\n${timestamp}`;
-  const signature = await hmacSha1(ACR_SECRET, stringToSign);
-
-  const arrayBuf = await audioBlob.arrayBuffer();
-  const form = new FormData();
-  form.append("access_key", ACR_KEY);
-  form.append("data_type", "audio");
-  form.append("signature_version", "1");
-  form.append("signature", signature);
-  form.append("timestamp", timestamp.toString());
-  form.append("sample_bytes", arrayBuf.byteLength.toString());
-  form.append("sample", audioBlob, "sample.webm");
-
-  const resp = await fetch(`https://${ACR_HOST}/v1/identify`, { method: "POST", body: form });
-  const data = await resp.json();
-
-  if (data.status && data.status.code === 0 && data.metadata) {
-    const music = data.metadata.music;
-    const humming = data.metadata.humming;
-    if (music && music.length > 0) return music[0];
-    if (humming && humming.length > 0) return humming[0];
-    throw new Error("Song recognized but no match found. Try a clearer part of the track.");
-  } else if (data.status && data.status.code === 0) {
-    throw new Error("No match found. Try during a clearer part of the song (e.g. chorus).");
-  } else if (data.status && data.status.code === 1001) {
-    throw new Error("No music detected. Make sure audio is playing in the tab.");
-  } else {
-    throw new Error(data.status ? data.status.msg : "Unknown error");
-  }
-}
-
-function showResult(song) {
-  const title = song.title || "Unknown";
-  const artist = (song.artists || []).map((a) => a.name).join(", ") || "Unknown";
-  const album = song.album ? song.album.name : "";
-
-  const ytQuery = encodeURIComponent(`${title} ${artist}`);
-  const ytUrl = `https://www.youtube.com/results?search_query=${ytQuery}`;
-
-  musicResult.innerHTML = `
-    <a class="song-card" href="${ytUrl}" target="_blank" style="text-decoration:none;color:inherit;cursor:pointer;">
-      <div class="art">🎵</div>
-      <div class="info">
-        <div class="title">${esc(title)}</div>
-        <div class="artist">${esc(artist)}</div>
-        ${album ? `<div class="album">${esc(album)}</div>` : ""}
-      </div>
-      <div style="color:#e94560;font-size:18px;flex-shrink:0;">▶</div>
-    </a>
-  `;
-
-  // Save to history
-  chrome.storage.local.get(["music_history"], (data) => {
-    const history = data.music_history || [];
-    history.unshift({ title, artist, album, time: Date.now() });
-    if (history.length > 20) history.length = 20;
-    chrome.storage.local.set({ music_history: history }, loadMusicHistory);
-  });
-}
-
-// ACR config save/load
-document.getElementById("acrSaveBtn").addEventListener("click", () => {
-  const host = document.getElementById("acrHost").value.trim();
-  const key = document.getElementById("acrKey").value.trim();
-  const secret = document.getElementById("acrSecret").value.trim();
-  ACR_HOST = host || ACR_HOST;
-  ACR_KEY = key;
-  ACR_SECRET = secret;
-  chrome.storage.local.set({ acr_host: ACR_HOST, acr_key: ACR_KEY, acr_secret: ACR_SECRET });
-  document.getElementById("acrSaveBtn").textContent = "Saved!";
-  setTimeout(() => { document.getElementById("acrSaveBtn").textContent = "Save"; }, 1500);
-});
-
-function showAcrConfig() {
-  document.getElementById("acrConfig").style.display = "";
-}
-
-document.getElementById("acrSettingsBtn").addEventListener("click", () => {
-  const cfg = document.getElementById("acrConfig");
-  if (cfg.style.display === "none") {
-    cfg.style.display = "";
-    // Load fields without the auto-hide logic
-    chrome.storage.local.get(["acr_host", "acr_key", "acr_secret"], (data) => {
-      document.getElementById("acrHost").value = data.acr_host || "identify-eu-west-1.acrcloud.com";
-      document.getElementById("acrKey").value = data.acr_key || "";
-      document.getElementById("acrSecret").value = data.acr_secret || "";
-    });
-  } else {
-    cfg.style.display = "none";
-  }
-});
-
-// Load ACR fields when music tab opens
-function loadAcrFields() {
-  chrome.storage.local.get(["acr_host", "acr_key", "acr_secret"], (data) => {
-    document.getElementById("acrHost").value = data.acr_host || "identify-eu-west-1.acrcloud.com";
-    document.getElementById("acrKey").value = data.acr_key || "";
-    document.getElementById("acrSecret").value = data.acr_secret || "";
-    // Only show config if creds are missing
-    if (!data.acr_key || !data.acr_secret) showAcrConfig();
-    else document.getElementById("acrConfig").style.display = "none";
-  });
-}
-
-function loadMusicHistory() {
-  chrome.storage.local.get(["music_history"], (data) => {
-    const history = data.music_history || [];
-    if (!history.length) {
-      musicHistoryEl.innerHTML = "";
-      return;
-    }
-    musicHistoryEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between"><h2>Recent</h2><button id="clearHistory" style="background:none;border:none;color:#e94560;font-size:11px;cursor:pointer;">Clear</button></div>` + history.map((h) => {
-      const q = encodeURIComponent(`${h.title} ${h.artist}`);
-      return `<a class="history-item" href="https://www.youtube.com/results?search_query=${q}" target="_blank" style="text-decoration:none;color:inherit;cursor:pointer;">
-        <span class="h-title">${esc(h.title)}</span>
-        <span class="h-artist">${esc(h.artist)}</span>
-        <span style="color:#e94560;font-size:12px;flex-shrink:0;">▶</span>
-      </a>`;
-    }).join("");
-    document.getElementById("clearHistory").addEventListener("click", () => {
-      chrome.storage.local.remove("music_history", loadMusicHistory);
-    });
-  });
-}
-
-// ═══════════════════════════════════
 //  Picture-in-Picture
 // ═══════════════════════════════════
 const pipBtn = document.getElementById("pipBtn");
@@ -1124,6 +892,320 @@ jsonformatToggle.addEventListener("change", async () => {
     chrome.tabs.sendMessage(tab.id, { type: "jsonformat_toggle", enabled }).catch(() => {});
   }
 });
+
+// ═══════════════════════════════════
+//  Quick Actions — Reading Material, Markdown, Calendar
+// ═══════════════════════════════════
+const READING_FOLDER_NAME = "Reading Material";
+const quickStatus = document.getElementById("quickStatus");
+
+function setQuickStatus(msg, kind) {
+  quickStatus.textContent = msg || "";
+  quickStatus.className = "quick-status" + (kind ? " " + kind : "");
+  if (msg) {
+    setTimeout(() => {
+      if (quickStatus.textContent === msg) {
+        quickStatus.textContent = "";
+        quickStatus.className = "quick-status";
+      }
+    }, 2500);
+  }
+}
+
+function flashButton(btn) {
+  btn.classList.add("flash");
+  setTimeout(() => btn.classList.remove("flash"), 1200);
+}
+
+async function findOrCreateReadingFolder() {
+  // Walk the tree and find a folder named "Reading Material" under any root.
+  // If multiple exist, prefer the one under the bookmarks bar (id "1").
+  const tree = await chrome.bookmarks.getTree();
+  let preferred = null;
+  let fallback = null;
+  function walk(node, underBar) {
+    if (!node) return;
+    if (!node.url && node.title === READING_FOLDER_NAME) {
+      if (underBar && !preferred) preferred = node;
+      else if (!fallback) fallback = node;
+    }
+    for (const child of node.children || []) {
+      walk(child, underBar || node.id === "1");
+    }
+  }
+  for (const root of tree) walk(root, false);
+  if (preferred) return preferred.id;
+  if (fallback) return fallback.id;
+  // Create under the bookmarks bar (id "1")
+  const created = await chrome.bookmarks.create({ parentId: "1", title: READING_FOLDER_NAME });
+  return created.id;
+}
+
+document.getElementById("qbReading").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) { setQuickStatus("No active tab", "err"); return; }
+    if (/^chrome:\/\//.test(tab.url) || /^chrome-extension:\/\//.test(tab.url)) {
+      setQuickStatus("Can't bookmark Chrome internal pages", "err");
+      return;
+    }
+    const parentId = await findOrCreateReadingFolder();
+    // Avoid creating a duplicate if the same URL already lives in the folder.
+    const existing = await chrome.bookmarks.search({ url: tab.url });
+    const already = existing.find((b) => b.parentId === parentId);
+    if (already) {
+      setQuickStatus("Already saved", "ok");
+      flashButton(btn);
+      return;
+    }
+    await chrome.bookmarks.create({ parentId, title: tab.title || tab.url, url: tab.url });
+    setQuickStatus("Saved to Reading Material", "ok");
+    flashButton(btn);
+  } catch (err) {
+    setQuickStatus(err.message || "Failed to save", "err");
+  }
+});
+
+document.getElementById("qbMarkdown").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
+      setQuickStatus("Can't read Chrome internal pages", "err");
+      return;
+    }
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractMarkdownFromPage,
+    });
+    const out = results && results[0] && results[0].result;
+    if (!out || !out.md) {
+      setQuickStatus("Nothing to convert", "err");
+      return;
+    }
+    await navigator.clipboard.writeText(out.md);
+    const label = out.source === "selection" ? "Selection copied" : "Article copied";
+    setQuickStatus(`${label} (${out.md.length} chars)`, "ok");
+    flashButton(btn);
+  } catch (err) {
+    setQuickStatus(err.message || "Failed", "err");
+  }
+});
+
+// Runs in the page context via chrome.scripting.executeScript
+function extractMarkdownFromPage() {
+  function toMd(root) {
+    const out = [];
+    function emit(s) { out.push(s); }
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        emit(node.textContent.replace(/\s+/g, " "));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "noscript" || tag === "iframe" || tag === "svg" || tag === "nav" || tag === "footer" || tag === "aside") return;
+      const collectInner = () => {
+        const before = out.length;
+        for (const c of node.childNodes) walk(c);
+        const slice = out.splice(before).join("");
+        return slice;
+      };
+      switch (tag) {
+        case "h1": emit("\n\n# " + collectInner().trim() + "\n\n"); return;
+        case "h2": emit("\n\n## " + collectInner().trim() + "\n\n"); return;
+        case "h3": emit("\n\n### " + collectInner().trim() + "\n\n"); return;
+        case "h4": emit("\n\n#### " + collectInner().trim() + "\n\n"); return;
+        case "h5": emit("\n\n##### " + collectInner().trim() + "\n\n"); return;
+        case "h6": emit("\n\n###### " + collectInner().trim() + "\n\n"); return;
+        case "p":  emit("\n\n" + collectInner().trim() + "\n\n"); return;
+        case "br": emit("\n"); return;
+        case "hr": emit("\n\n---\n\n"); return;
+        case "a": {
+          const text = collectInner().trim();
+          const href = node.getAttribute("href") || "";
+          emit(href && text ? `[${text}](${href})` : text);
+          return;
+        }
+        case "strong": case "b": emit("**" + collectInner() + "**"); return;
+        case "em": case "i": emit("*" + collectInner() + "*"); return;
+        case "code": {
+          const parent = node.parentNode && node.parentNode.tagName;
+          if (parent === "PRE") { emit(collectInner()); return; }
+          emit("`" + collectInner() + "`"); return;
+        }
+        case "pre": emit("\n\n```\n" + (node.textContent || "").replace(/\n+$/, "") + "\n```\n\n"); return;
+        case "blockquote": {
+          const text = collectInner().trim();
+          emit("\n\n" + text.split("\n").map((l) => "> " + l).join("\n") + "\n\n");
+          return;
+        }
+        case "ul": case "ol": emit("\n" + collectInner() + "\n"); return;
+        case "li": {
+          const ordered = node.parentNode && node.parentNode.tagName === "OL";
+          emit((ordered ? "1. " : "- ") + collectInner().trim() + "\n");
+          return;
+        }
+        case "img": {
+          const alt = node.getAttribute("alt") || "";
+          const src = node.getAttribute("src") || "";
+          if (src) emit(`![${alt}](${src})`);
+          return;
+        }
+        case "table": case "thead": case "tbody": case "tr": case "th": case "td":
+          emit(collectInner() + " "); return;
+        default:
+          emit(collectInner()); return;
+      }
+    }
+    walk(root);
+    return out.join("").replace(/\n{3,}/g, "\n\n").replace(/[ \t]+\n/g, "\n").trim();
+  }
+
+  const sel = window.getSelection();
+  if (sel && String(sel).trim()) {
+    const range = sel.getRangeAt(0);
+    const container = document.createElement("div");
+    container.appendChild(range.cloneContents());
+    return { md: toMd(container), source: "selection" };
+  }
+  const root =
+    document.querySelector("article") ||
+    document.querySelector('[role="main"]') ||
+    document.querySelector("main") ||
+    document.body;
+  const body = toMd(root);
+  const header = `# ${document.title || ""}\n\n${location.href}\n\n---\n\n`;
+  return { md: header + body, source: "article" };
+}
+
+document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return;
+    let selection = "";
+    if (tab.id && tab.url && !/^chrome:\/\//.test(tab.url) && !/^chrome-extension:\/\//.test(tab.url)) {
+      try {
+        const res = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => (window.getSelection() ? window.getSelection().toString().trim() : ""),
+        });
+        selection = (res && res[0] && res[0].result) || "";
+      } catch (_) {}
+    }
+    const params = new URLSearchParams();
+    if (selection) params.set("text", selection.slice(0, 1024));
+    const details = [tab.title, tab.url].filter(Boolean).join("\n");
+    if (details) params.set("details", details.slice(0, 4096));
+    await chrome.tabs.create({
+      url: "https://calendar.google.com/calendar/u/0/r/eventedit?" + params.toString(),
+    });
+    flashButton(btn);
+  } catch (err) {
+    setQuickStatus(err.message || "Failed", "err");
+  }
+});
+
+document.getElementById("qbCalToday").addEventListener("click", async (e) => {
+  try {
+    await chrome.tabs.create({ url: "https://calendar.google.com/calendar/u/0/r/day" });
+    flashButton(e.currentTarget);
+  } catch (err) {
+    setQuickStatus(err.message || "Failed", "err");
+  }
+});
+
+// ═══════════════════════════════════
+//  Localhost Port Jumper
+// ═══════════════════════════════════
+const localhostListEl = document.getElementById("localhostList");
+document.getElementById("lhRefresh").addEventListener("click", () => loadLocalhost());
+
+async function loadLocalhost() {
+  localhostListEl.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    if (!chrome.history || !chrome.history.search) {
+      localhostListEl.innerHTML = '<div class="empty">History API unavailable</div>';
+      return;
+    }
+    const since = Date.now() - 30 * 86400 * 1000;
+    const results = await chrome.history.search({
+      text: "localhost",
+      maxResults: 1000,
+      startTime: since,
+    });
+    // Also pull 127.0.0.1 since chrome.history.search is substring-based
+    const results2 = await chrome.history.search({
+      text: "127.0.0.1",
+      maxResults: 500,
+      startTime: since,
+    });
+
+    const grouped = new Map();
+    function ingest(item) {
+      try {
+        const u = new URL(item.url);
+        if (u.hostname !== "localhost" && u.hostname !== "127.0.0.1") return;
+        const port = u.port || (u.protocol === "https:" ? "443" : "80");
+        const path = (u.pathname && u.pathname !== "/") ? u.pathname + (u.search || "") : (u.search || "");
+        const key = `${u.protocol}//${u.hostname}:${port}${path}`;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.count += (item.visitCount || 1);
+          if ((item.lastVisitTime || 0) > existing.lastVisit) {
+            existing.lastVisit = item.lastVisitTime || existing.lastVisit;
+            existing.title = item.title || existing.title;
+          }
+        } else {
+          grouped.set(key, {
+            url: item.url,
+            host: u.hostname,
+            port,
+            path: path || "/",
+            protocol: u.protocol.replace(":", ""),
+            title: item.title || "",
+            lastVisit: item.lastVisitTime || 0,
+            count: item.visitCount || 1,
+          });
+        }
+      } catch (_) {}
+    }
+    for (const r of results) ingest(r);
+    for (const r of results2) ingest(r);
+
+    const sorted = Array.from(grouped.values())
+      .sort((a, b) => b.lastVisit - a.lastVisit)
+      .slice(0, 30);
+
+    if (!sorted.length) {
+      localhostListEl.innerHTML = '<div class="empty">No recent localhost visits</div>';
+      return;
+    }
+
+    localhostListEl.innerHTML = sorted.map((it) => `
+      <a class="localhost-item" href="${escA(it.url)}" data-url="${escA(it.url)}" title="${escA(it.url)}">
+        <span class="lh-protocol${it.protocol === "https" ? " https" : ""}">${esc(it.protocol)}</span>
+        <span class="lh-port">:${esc(it.port)}</span>
+        <span class="lh-path">${esc(it.path)}</span>
+        <span class="lh-time">${timeAgo(it.lastVisit)}</span>
+      </a>
+    `).join("");
+
+    localhostListEl.querySelectorAll(".localhost-item").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        chrome.tabs.create({ url: a.dataset.url });
+      });
+    });
+  } catch (err) {
+    localhostListEl.innerHTML = `<div class="empty">${esc(err.message || "Failed to load")}</div>`;
+  }
+}
 
 // ═══════════════════════════════════
 //  Helpers
