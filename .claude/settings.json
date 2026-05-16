@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && node scripts/check-instrumentation.mjs 1>&2"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && node scripts/check-instrumentation.mjs 1>&2 && node scripts/check-security.mjs 1>&2"
           }
         ]
       }
@@ -15,6 +15,7 @@
   "permissions": {
     "allow": [
       "Bash(node scripts/check-instrumentation.mjs)",
+      "Bash(node scripts/check-security.mjs)",
       "Bash(node --check *)"
     ]
   }

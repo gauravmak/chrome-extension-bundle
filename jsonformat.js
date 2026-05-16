@@ -185,7 +185,7 @@
 
     // Replace body content
     document.head.appendChild(style);
-    document.body.innerHTML = "";
+    document.body.innerHTML = ""; // safe-html: empty string clears the element
 
     // Toolbar
     const toolbar = document.createElement("div");
@@ -207,7 +207,7 @@
       SL.log.action("jsonformat", "raw");
       const el = document.getElementById(STYLE_ID);
       if (el) el.remove();
-      document.body.innerHTML = "";
+      document.body.innerHTML = ""; // safe-html: empty string clears the element
       const pre = document.createElement("pre");
       pre.textContent = raw.trim();
       document.body.appendChild(pre);
@@ -237,7 +237,7 @@
     // Formatted JSON
     const wrap = document.createElement("div");
     wrap.className = "sl-jf-wrap";
-    wrap.innerHTML = buildCollapsible(parsed, 0);
+    wrap.innerHTML = buildCollapsible(parsed, 0); // safe-html: buildCollapsible() escapes all interpolations via escHtml()
     document.body.appendChild(wrap);
 
     // Toggle click handler (event delegation)

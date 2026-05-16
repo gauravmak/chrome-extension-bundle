@@ -117,10 +117,10 @@ function removeHost(host) {
 
 function renderExclusionList(exclusions) {
   if (!exclusions.length) {
-    listEl.innerHTML = '<div class="empty">No exclusions — all tabs can be closed</div>';
+    listEl.innerHTML = '<div class="empty">No exclusions — all tabs can be closed</div>'; // safe-html: literal HTML, no interpolation
     return;
   }
-  listEl.innerHTML = exclusions
+  listEl.innerHTML = exclusions // safe-html: every interpolation routed through esc()/escA()
     .map((h) => `<div class="item"><span>${esc(h)}</span><button data-host="${escA(h)}">&times;</button></div>`)
     .join("");
   listEl.querySelectorAll("button[data-host]").forEach((btn) => {
@@ -139,9 +139,10 @@ function loadClosedTabs() {
   chrome.storage.local.get(["closed_tabs"], (data) => {
     const closed = data.closed_tabs || [];
     if (!closed.length) {
-      closedSection.innerHTML = "";
+      closedSection.innerHTML = ""; // safe-html: empty string clears the element
       return;
     }
+    // safe-html: every interpolation routed through esc()/escA()
     closedSection.innerHTML = `
       <div class="closed-header">
         <h2>Recently Closed</h2>
@@ -202,7 +203,7 @@ async function loadCookies() {
   if (!tab || !tab.url) {
     cookieDomainEl.textContent = "No accessible page";
     cookieCountEl.textContent = "0";
-    cookieListEl.innerHTML = '<div class="empty">Cannot read cookies from this page</div>';
+    cookieListEl.innerHTML = '<div class="empty">Cannot read cookies from this page</div>'; // safe-html: literal HTML
     return;
   }
   currentUrl = tab.url;
@@ -222,9 +223,10 @@ async function loadCookies() {
 
 function renderCookies(cookies) {
   if (!cookies.length) {
-    cookieListEl.innerHTML = '<div class="empty">No cookies for this site</div>';
+    cookieListEl.innerHTML = '<div class="empty">No cookies for this site</div>'; // safe-html: literal HTML
     return;
   }
+  // safe-html: every interpolation routed through esc()/escA()
   cookieListEl.innerHTML = cookies.map((c, i) => `
     <div class="cookie-item" data-idx="${i}">
       <div class="cookie-row">
@@ -449,7 +451,7 @@ let lastRedirectText = "";
 async function loadRedirects() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) {
-    redirectChainEl.innerHTML = '<div class="redirect-empty"><div class="big-icon">🔀</div><p>No active tab</p></div>';
+    redirectChainEl.innerHTML = '<div class="redirect-empty"><div class="big-icon">🔀</div><p>No active tab</p></div>'; // safe-html: literal HTML
     return;
   }
 
@@ -460,7 +462,7 @@ async function loadRedirects() {
 
   if (!chain.length) {
     // No redirects — just show the final URL
-    redirectChainEl.innerHTML = renderStep(finalUrl, finalStatus, true, false);
+    redirectChainEl.innerHTML = renderStep(finalUrl, finalStatus, true, false); // safe-html: renderStep() escapes all interpolations via esc()
     lastRedirectText = `${finalUrl}\n${finalStatus}: Final destination`;
     return;
   }
@@ -476,7 +478,7 @@ async function loadRedirects() {
   html += renderStep(finalUrl, finalStatus, true, false);
   text += `${finalUrl}\n${finalStatus}: Final destination`;
 
-  redirectChainEl.innerHTML = html;
+  redirectChainEl.innerHTML = html; // safe-html: html is concatenated renderStep() output, all interpolations esc()'d
   lastRedirectText = text;
 }
 
@@ -1509,10 +1511,10 @@ document.getElementById("lhRefresh").addEventListener("click", () => {
 });
 
 async function loadLocalhost() {
-  localhostListEl.innerHTML = '<div class="empty">Loading...</div>';
+  localhostListEl.innerHTML = '<div class="empty">Loading...</div>'; // safe-html: literal HTML
   try {
     if (!chrome.history || !chrome.history.search) {
-      localhostListEl.innerHTML = '<div class="empty">History API unavailable</div>';
+      localhostListEl.innerHTML = '<div class="empty">History API unavailable</div>'; // safe-html: literal HTML
       return;
     }
     const since = Date.now() - 30 * 86400 * 1000;
@@ -1565,10 +1567,11 @@ async function loadLocalhost() {
       .slice(0, 30);
 
     if (!sorted.length) {
-      localhostListEl.innerHTML = '<div class="empty">No recent localhost visits</div>';
+      localhostListEl.innerHTML = '<div class="empty">No recent localhost visits</div>'; // safe-html: literal HTML
       return;
     }
 
+    // safe-html: every interpolation routed through esc()/escA()
     localhostListEl.innerHTML = sorted.map((it) => `
       <a class="localhost-item" href="${escA(it.url)}" data-url="${escA(it.url)}" title="${escA(it.url)}">
         <span class="lh-protocol${it.protocol === "https" ? " https" : ""}">${esc(it.protocol)}</span>
@@ -1587,7 +1590,7 @@ async function loadLocalhost() {
       });
     });
   } catch (err) {
-    localhostListEl.innerHTML = `<div class="empty">${esc(err.message || "Failed to load")}</div>`;
+    localhostListEl.innerHTML = `<div class="empty">${esc(err.message || "Failed to load")}</div>`; // safe-html: err.message routed through esc()
   }
 }
 
