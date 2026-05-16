@@ -51,15 +51,17 @@
     style.id = STYLE_ID;
     style.textContent = sels.join(",\n") + " { display: none !important; }";
     (document.head || document.documentElement).appendChild(style);
+    SL.log.action("nfe", "inject", { site: SITE });
   }
 
   function remove() {
     const el = document.getElementById(STYLE_ID);
-    if (el) el.remove();
+    if (el) { el.remove(); SL.log.action("nfe", "remove", { site: SITE }); }
   }
 
   if (STORAGE_KEY) {
     chrome.storage.local.get([STORAGE_KEY], (data) => {
+      SL.log.info("nfe", "init", { site: SITE, enabled: data[STORAGE_KEY] === true });
       if (data[STORAGE_KEY] === true) inject();
     });
   }
@@ -67,6 +69,7 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.type !== "nfe_toggle") return;
     if (msg.site && msg.site !== SITE) return;
+    SL.log.info("nfe", "msg.toggle", { site: SITE, enabled: msg.enabled });
     if (msg.enabled) inject();
     else remove();
   });

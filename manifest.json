@@ -14,19 +14,19 @@
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],
-    "js": ["darkmode.js", "nocookie.js", "livecss.js"],
+    "js": ["logger.js", "darkmode.js", "nocookie.js", "livecss.js"],
     "run_at": "document_start"
   }, {
     "matches": ["<all_urls>"],
-    "js": ["jsonformat.js"],
+    "js": ["logger.js", "jsonformat.js"],
     "run_at": "document_end"
   }, {
     "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*"],
-    "js": ["unhook.js"],
+    "js": ["logger.js", "unhook.js"],
     "run_at": "document_start"
   }, {
     "matches": ["*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*"],
-    "js": ["xunhook.js"],
+    "js": ["logger.js", "xunhook.js"],
     "run_at": "document_start"
   }, {
     "matches": [
@@ -35,15 +35,15 @@
       "*://*.facebook.com/*",
       "*://*.reddit.com/*"
     ],
-    "js": ["nfe.js"],
+    "js": ["logger.js", "nfe.js"],
     "run_at": "document_start"
   }, {
     "matches": ["*://www.google.com/*", "*://www.google.co.uk/*", "*://www.google.co.jp/*", "*://www.google.co.in/*", "*://www.google.co.kr/*", "*://www.google.co.id/*", "*://www.google.com.br/*", "*://www.google.com.au/*", "*://www.google.com.mx/*", "*://www.google.de/*", "*://www.google.fr/*", "*://www.google.es/*", "*://www.google.it/*", "*://www.google.nl/*", "*://www.google.pt/*", "*://www.google.pl/*", "*://www.google.se/*", "*://www.google.ca/*", "*://www.google.ru/*"],
-    "js": ["gmaps.js"],
+    "js": ["logger.js", "gmaps.js"],
     "run_at": "document_end"
   }, {
     "matches": ["*://www.google.com/*", "*://www.google.co.uk/*", "*://www.google.co.jp/*", "*://www.google.co.in/*", "*://www.google.co.kr/*", "*://www.google.co.id/*", "*://www.google.com.br/*", "*://www.google.com.au/*", "*://www.google.com.mx/*", "*://www.google.de/*", "*://www.google.fr/*", "*://www.google.es/*", "*://www.google.it/*", "*://www.google.nl/*", "*://www.google.pt/*", "*://www.google.pl/*", "*://www.google.se/*", "*://www.google.ca/*", "*://www.google.ru/*"],
-    "js": ["viewimage.js"],
+    "js": ["logger.js", "viewimage.js"],
     "run_at": "document_end"
   }],
   "icons": {

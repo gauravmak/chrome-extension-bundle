@@ -1,3 +1,6 @@
+importScripts("logger.js");
+SL.log.info("bg", "boot");
+
 const DEFAULT_TIMEOUT_MIN = 5;
 const CHECK_INTERVAL_MIN = 1;
 
@@ -101,6 +104,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const lastActive = tabActivity[tab.id] || 0;
     if (now - lastActive >= timeoutMs) {
       windowTabCounts[tab.windowId]--;
+      SL.log.action("bg", "tab.autoClose", { tabId: tab.id, url: tab.url, idleMin: Math.round((now - lastActive) / 60000) });
       // Save to closed history before removing
       saveClosedTab(tab);
       chrome.tabs.remove(tab.id);
@@ -174,10 +178,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // Respond to popup requests
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  SL.log.info("bg", "msg.received", { type: msg && msg.type, from: sender && sender.id });
   if (msg.type === "getRedirects") {
-    sendResponse(redirectData[msg.tabId] || { chain: [], finalUrl: null, finalStatus: null });
+    const data = redirectData[msg.tabId] || { chain: [], finalUrl: null, finalStatus: null };
+    SL.log.info("bg", "msg.getRedirects", { tabId: msg.tabId, hops: data.chain.length });
+    sendResponse(data);
   }
   if (msg.type === "pip") {
+    SL.log.action("bg", "pip", { tabId: msg.tabId });
     chrome.scripting.executeScript({
       target: { tabId: msg.tabId },
       func: () => {

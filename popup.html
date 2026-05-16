@@ -633,6 +633,36 @@
     }
     .btn-cancel { background: #333; color: #aaa; }
     .btn-cancel:hover { background: #444; }
+
+    /* ── Toast notifier ── */
+    .sl-toast {
+      position: fixed;
+      bottom: 14px; left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 8px 14px;
+      background: #16213e;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #e0e0e0;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      z-index: 10000;
+      max-width: 90%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    }
+    .sl-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .sl-toast.ok  { border-color: #2a8a4a; color: #6af38a; }
+    .sl-toast.err { border-color: #8a2a2a; color: #f36a6a; }
+    .sl-toast.info { border-color: #2a6ab5; color: #6ab0f3; }
   </style>
 </head>
 <body>
@@ -1032,6 +1062,7 @@
     </div>
   </div>
 
+  <script src="logger.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

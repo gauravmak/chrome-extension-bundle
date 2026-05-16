@@ -39,9 +39,11 @@
       }
       style.textContent = buildCSS(brightness);
       document.documentElement.classList.add("superlevels-dark");
+      SL.log.action("darkmode", "apply", { host: location.hostname, brightness });
     } else {
       document.documentElement.classList.remove("superlevels-dark");
       if (style) style.remove();
+      SL.log.action("darkmode", "remove", { host: location.hostname });
     }
   }
 
@@ -63,6 +65,7 @@
   // Listen for toggle messages from popup
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "darkmode_toggle") {
+      SL.log.info("darkmode", "msg.toggle", { enabled: msg.enabled, brightness: msg.brightness });
       applyDarkMode(msg.enabled, msg.brightness || 100);
       sendResponse({ ok: true });
     }

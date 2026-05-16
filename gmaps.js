@@ -3,6 +3,7 @@
 //  Adds "Maps" tab + makes map thumbnails clickable on Google Search
 // ═══════════════════════════════════
 (() => {
+  SL.log.info("gmaps", "init", { host: location.host });
   const style = document.createElement("style");
   style.textContent = `
     .sl-maps-btn {

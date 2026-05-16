@@ -1,4 +1,18 @@
 // ═══════════════════════════════════
+//  Logger aliases — keeps every handler concise.
+//  See logger.js for the underlying implementation.
+// ═══════════════════════════════════
+const log      = (action, data) => SL.log.action("popup", action, data);
+const logInfo  = (action, data) => SL.log.info("popup", action, data);
+const logWarn  = (action, data) => SL.log.warn("popup", action, data);
+const logError = (action, data) => SL.log.error("popup", action, data);
+const notify   = (msg, kind)    => SL.notify(msg, kind);
+const notifyOk = (msg)          => SL.notify(msg, "ok");
+const notifyErr= (msg)          => SL.notify(msg, "err");
+
+SL.log.info("popup", "boot");
+
+// ═══════════════════════════════════
 //  Navigation
 // ═══════════════════════════════════
 function switchToPage(page) {
@@ -21,7 +35,11 @@ function switchToPage(page) {
 }
 
 document.querySelectorAll(".nav button").forEach((btn) => {
-  btn.addEventListener("click", () => switchToPage(btn.dataset.page));
+  btn.addEventListener("click", () => {
+    log("nav", { to: btn.dataset.page });
+    notify(btn.textContent.trim(), "info");
+    switchToPage(btn.dataset.page);
+  });
 });
 
 // Restore last open tab
@@ -45,37 +63,55 @@ chrome.storage.local.get(["enabled", "timeoutMin", "exclusions"], (data) => {
 });
 
 enabledEl.addEventListener("change", () => {
+  log("tabcleaner.enabled", { enabled: enabledEl.checked });
   chrome.storage.local.set({ enabled: enabledEl.checked });
+  notify("Auto-close " + (enabledEl.checked ? "enabled" : "disabled"), "ok");
 });
 
 timeoutEl.addEventListener("change", () => {
   const val = Math.max(1, Math.min(1440, parseInt(timeoutEl.value) || 5));
   timeoutEl.value = val;
+  log("tabcleaner.timeout", { minutes: val });
   chrome.storage.local.set({ timeoutMin: val });
+  notify("Timeout: " + val + " min", "ok");
 });
 
 function addHost() {
   let host = hostInput.value.trim().toLowerCase();
-  if (!host) return;
+  if (!host) { notify("Enter a host first", "err"); return; }
   host = host.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  log("tabcleaner.addHost", { host });
   chrome.storage.local.get(["exclusions"], (data) => {
     const exclusions = data.exclusions || [];
-    if (exclusions.includes(host)) { hostInput.value = ""; return; }
+    if (exclusions.includes(host)) {
+      hostInput.value = "";
+      notify("Already excluded: " + host, "info");
+      return;
+    }
     exclusions.push(host);
     chrome.storage.local.set({ exclusions }, () => {
       hostInput.value = "";
       renderExclusionList(exclusions);
+      notifyOk("Excluded: " + host);
     });
   });
 }
 
-addBtn.addEventListener("click", addHost);
+addBtn.addEventListener("click", () => {
+  log("tabcleaner.addClick");
+  addHost(); // addHost() emits its own notify() based on outcome
+  // no-notify: outcome notification fires inside addHost()
+});
 hostInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addHost(); });
 
 function removeHost(host) {
+  log("tabcleaner.removeHost", { host });
   chrome.storage.local.get(["exclusions"], (data) => {
     const exclusions = (data.exclusions || []).filter((h) => h !== host);
-    chrome.storage.local.set({ exclusions }, () => renderExclusionList(exclusions));
+    chrome.storage.local.set({ exclusions }, () => {
+      renderExclusionList(exclusions);
+      notifyOk("Removed: " + host);
+    });
   });
 }
 
@@ -88,7 +124,11 @@ function renderExclusionList(exclusions) {
     .map((h) => `<div class="item"><span>${esc(h)}</span><button data-host="${escA(h)}">&times;</button></div>`)
     .join("");
   listEl.querySelectorAll("button[data-host]").forEach((btn) => {
-    btn.addEventListener("click", () => removeHost(btn.dataset.host));
+    btn.addEventListener("click", () => {
+      log("tabcleaner.removeClick", { host: btn.dataset.host });
+      removeHost(btn.dataset.host);
+      // no-notify: removeHost() fires its own success notify
+    });
   });
 }
 
@@ -117,11 +157,17 @@ function loadClosedTabs() {
     `).join("");
 
     document.getElementById("clearClosed").addEventListener("click", () => {
-      chrome.storage.local.remove("closed_tabs", loadClosedTabs);
+      log("tabcleaner.clearClosed");
+      chrome.storage.local.remove("closed_tabs", () => {
+        loadClosedTabs();
+        notifyOk("Cleared closed tabs history");
+      });
     });
 
     closedSection.querySelectorAll(".closed-item").forEach((item) => {
       item.addEventListener("click", () => {
+        log("tabcleaner.reopen", { url: item.dataset.url });
+        notify("Reopening tab…", "info");
         chrome.tabs.create({ url: item.dataset.url });
       });
     });
@@ -225,7 +271,10 @@ function renderCookies(cookies) {
   cookieListEl.querySelectorAll(".cookie-row").forEach((row) => {
     row.addEventListener("click", (e) => {
       if (e.target.closest(".cookie-del")) return;
-      row.closest(".cookie-item").classList.toggle("expanded");
+      const item = row.closest(".cookie-item");
+      item.classList.toggle("expanded");
+      log("cookies.expand", { idx: item.dataset.idx, open: item.classList.contains("expanded") });
+      // no-notify: pure UI state — user already sees the row expand
     });
   });
 
@@ -235,6 +284,8 @@ function renderCookies(cookies) {
       const fields = cookieListEl.querySelector(`.advanced-fields[data-advf="${t.dataset.adv}"]`);
       fields.classList.toggle("show");
       t.textContent = fields.classList.contains("show") ? "Hide Advanced" : "Show Advanced";
+      log("cookies.advanced", { idx: t.dataset.adv, show: fields.classList.contains("show") });
+      // no-notify: pure UI state — fields show/hide is the visible feedback
     });
   });
 
@@ -242,13 +293,20 @@ function renderCookies(cookies) {
   cookieListEl.querySelectorAll("[data-delidx]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      deleteCookie(allCookies[parseInt(btn.dataset.delidx)]);
+      const cookie = allCookies[parseInt(btn.dataset.delidx)];
+      log("cookies.delete", { name: cookie && cookie.name });
+      notify("Deleting cookie " + (cookie && cookie.name) + "…", "info");
+      deleteCookie(cookie);
     });
   });
 
   // Save buttons
   cookieListEl.querySelectorAll("[data-saveidx]").forEach((btn) => {
-    btn.addEventListener("click", () => saveCookie(parseInt(btn.dataset.saveidx)));
+    btn.addEventListener("click", () => {
+      log("cookies.save", { idx: btn.dataset.saveidx });
+      notify("Saving cookie…", "info");
+      saveCookie(parseInt(btn.dataset.saveidx));
+    });
   });
 }
 
@@ -296,21 +354,34 @@ async function saveCookie(idx) {
 
 // Delete All
 document.getElementById("btnDeleteAll").addEventListener("click", async () => {
-  if (!allCookies.length) return;
-  for (const c of allCookies) {
-    const protocol = c.secure ? "https" : "http";
-    const url = `${protocol}://${c.domain.replace(/^\./, "")}${c.path}`;
-    await chrome.cookies.remove({ url, name: c.name });
+  log("cookies.deleteAll", { count: allCookies.length });
+  if (!allCookies.length) { notify("No cookies to delete", "info"); return; }
+  notify("Deleting " + allCookies.length + " cookies…", "info");
+  try {
+    for (const c of allCookies) {
+      const protocol = c.secure ? "https" : "http";
+      const url = `${protocol}://${c.domain.replace(/^\./, "")}${c.path}`;
+      await chrome.cookies.remove({ url, name: c.name });
+    }
+    loadCookies();
+    notifyOk("Deleted all cookies for " + currentDomain);
+  } catch (err) {
+    logError("cookies.deleteAll.fail", { error: err.message });
+    notifyErr("Delete failed: " + err.message);
   }
-  loadCookies();
 });
 
 // Refresh
-document.getElementById("btnRefresh").addEventListener("click", () => loadCookies());
+document.getElementById("btnRefresh").addEventListener("click", () => {
+  log("cookies.refresh");
+  notify("Refreshing cookies…", "info");
+  loadCookies();
+});
 
 // Export
 document.getElementById("btnExport").addEventListener("click", () => {
-  if (!allCookies.length) return;
+  log("cookies.export", { count: allCookies.length });
+  if (!allCookies.length) { notify("Nothing to export", "info"); return; }
   const data = JSON.stringify(allCookies, null, 2);
   const blob = new Blob([data], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -319,38 +390,54 @@ document.getElementById("btnExport").addEventListener("click", () => {
   a.download = `cookies-${currentDomain}-${Date.now()}.json`;
   a.click();
   URL.revokeObjectURL(url);
+  notifyOk("Exported " + allCookies.length + " cookies");
 });
 
 // Add Cookie Modal
 const addModal = document.getElementById("addModal");
 document.getElementById("btnAdd").addEventListener("click", () => {
+  log("cookies.addOpen");
   document.getElementById("newDomain").value = currentDomain ? "." + currentDomain : "";
   document.getElementById("newPath").value = "/";
   document.getElementById("newName").value = "";
   document.getElementById("newValue").value = "";
   addModal.classList.add("show");
+  notify("Add cookie", "info");
 });
 document.getElementById("modalCancel").addEventListener("click", () => {
+  log("cookies.addCancel");
   addModal.classList.remove("show");
+  notify("Cancelled", "info");
 });
 addModal.addEventListener("click", (e) => {
-  if (e.target === addModal) addModal.classList.remove("show");
+  if (e.target === addModal) {
+    log("cookies.addDismiss");
+    addModal.classList.remove("show");
+    // no-notify: backdrop click just closes the modal — modal disappearing is the feedback
+  }
 });
 document.getElementById("modalSave").addEventListener("click", async () => {
   const name = document.getElementById("newName").value.trim();
-  if (!name) return;
+  log("cookies.addSave", { name });
+  if (!name) { notify("Name is required", "err"); return; }
   const domain = document.getElementById("newDomain").value.trim();
   const path = document.getElementById("newPath").value.trim() || "/";
   const url = `https://${domain.replace(/^\./, "")}${path}`;
-  await chrome.cookies.set({
-    url,
-    name,
-    value: document.getElementById("newValue").value,
-    domain,
-    path,
-  });
-  addModal.classList.remove("show");
-  loadCookies();
+  try {
+    await chrome.cookies.set({
+      url,
+      name,
+      value: document.getElementById("newValue").value,
+      domain,
+      path,
+    });
+    addModal.classList.remove("show");
+    loadCookies();
+    notifyOk("Added cookie " + name);
+  } catch (err) {
+    logError("cookies.addSave.fail", { error: err.message });
+    notifyErr("Add failed: " + err.message);
+  }
 });
 
 // ═══════════════════════════════════
@@ -426,15 +513,26 @@ function getRedirectLabel(code) {
   return labels[code] || `Redirect (${code})`;
 }
 
-document.getElementById("btnRedirectRefresh").addEventListener("click", () => loadRedirects());
+document.getElementById("btnRedirectRefresh").addEventListener("click", () => {
+  log("redirects.refresh");
+  notify("Refreshing redirect chain…", "info");
+  loadRedirects();
+});
 
 document.getElementById("btnRedirectCopy").addEventListener("click", async () => {
-  if (!lastRedirectText) return;
-  await navigator.clipboard.writeText(lastRedirectText);
-  const btn = document.getElementById("btnRedirectCopy");
-  const orig = btn.querySelector("span").textContent;
-  btn.querySelector("span").textContent = "Copied!";
-  setTimeout(() => { btn.querySelector("span").textContent = orig; }, 1500);
+  log("redirects.copy", { length: lastRedirectText.length });
+  if (!lastRedirectText) { notify("Nothing to copy", "info"); return; }
+  try {
+    await navigator.clipboard.writeText(lastRedirectText);
+    const btn = document.getElementById("btnRedirectCopy");
+    const orig = btn.querySelector("span").textContent;
+    btn.querySelector("span").textContent = "Copied!";
+    setTimeout(() => { btn.querySelector("span").textContent = orig; }, 1500);
+    notifyOk("Redirect chain copied");
+  } catch (err) {
+    logError("redirects.copy.fail", { error: err.message });
+    notifyErr("Copy failed: " + err.message);
+  }
 });
 
 // ═══════════════════════════════════
@@ -481,6 +579,7 @@ function updateDarkStatus(on) {
 async function applyDark() {
   const enabled = darkToggle.checked;
   const brightness = parseInt(darkBrightness.value);
+  log("darkmode.apply", { enabled, brightness, scope: darkScope, host: darkHost });
   updateDarkStatus(enabled);
 
   // Save preference
@@ -501,24 +600,39 @@ async function applyDark() {
       brightness,
     }).catch(() => {});
   }
+  const scopeLabel = darkScope === "global" ? "all sites" : darkHost;
+  notify("Dark mode " + (enabled ? "ON" : "OFF") + " — " + scopeLabel, enabled ? "ok" : "info");
 }
 
-darkToggle.addEventListener("change", applyDark);
+darkToggle.addEventListener("change", () => {
+  log("darkmode.toggle", { checked: darkToggle.checked });
+  applyDark();
+  // no-notify: applyDark() emits its own notification with full scope info
+});
 
 darkBrightness.addEventListener("input", () => {
   darkBrightnessVal.textContent = darkBrightness.value + "%";
+  logInfo("darkmode.brightness.slide", { value: darkBrightness.value });
 });
-darkBrightness.addEventListener("change", applyDark);
+darkBrightness.addEventListener("change", () => {
+  log("darkmode.brightness", { value: darkBrightness.value });
+  applyDark();
+  // no-notify: applyDark() emits the notification
+});
 
 scopeSite.addEventListener("click", () => {
+  log("darkmode.scope", { scope: "site" });
   darkScope = "site";
   scopeSite.classList.add("active");
   scopeGlobal.classList.remove("active");
+  notify("Scope: this site only", "info");
 });
 scopeGlobal.addEventListener("click", () => {
+  log("darkmode.scope", { scope: "global" });
   darkScope = "global";
   scopeGlobal.classList.add("active");
   scopeSite.classList.remove("active");
+  notify("Scope: all sites", "info");
 });
 
 // ═══════════════════════════════════
@@ -541,6 +655,7 @@ function updateNoCookieUI(on) {
 
 nocookieToggle.addEventListener("change", async () => {
   const enabled = nocookieToggle.checked;
+  log("nocookie.toggle", { enabled });
   updateNoCookieUI(enabled);
   await chrome.storage.local.set({ nocookie_enabled: enabled });
 
@@ -548,6 +663,7 @@ nocookieToggle.addEventListener("change", async () => {
   if (tab) {
     chrome.tabs.sendMessage(tab.id, { type: "nocookie_toggle", enabled }).catch(() => {});
   }
+  notify("Cookie dismisser " + (enabled ? "ON" : "OFF"), enabled ? "ok" : "info");
 });
 
 // ═══════════════════════════════════
@@ -572,8 +688,10 @@ async function loadLiveCSS() {
   livecssEditor.value = data[key] || "";
 }
 
-// Live preview as user types
+// Live preview as user types. We deliberately skip a toast here — fires on every
+// keystroke and would spam. Only debug-log.
 livecssEditor.addEventListener("input", async () => {
+  logInfo("livecss.input", { length: livecssEditor.value.length });
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab) {
     chrome.tabs.sendMessage(tab.id, { type: "livecss_update", css: livecssEditor.value }).catch(() => {});
@@ -593,13 +711,21 @@ livecssEditor.addEventListener("keydown", (e) => {
 });
 
 livecssSave.addEventListener("click", async () => {
-  const key = "livecss_" + livecssHost;
-  await chrome.storage.local.set({ [key]: livecssEditor.value });
-  livecssSave.textContent = "Saved!";
-  setTimeout(() => { livecssSave.textContent = "Save"; }, 1500);
+  log("livecss.save", { host: livecssHost, length: livecssEditor.value.length });
+  try {
+    const key = "livecss_" + livecssHost;
+    await chrome.storage.local.set({ [key]: livecssEditor.value });
+    livecssSave.textContent = "Saved!";
+    setTimeout(() => { livecssSave.textContent = "Save"; }, 1500);
+    notifyOk("CSS saved for " + livecssHost);
+  } catch (err) {
+    logError("livecss.save.fail", { error: err.message });
+    notifyErr("Save failed: " + err.message);
+  }
 });
 
 livecssClear.addEventListener("click", async () => {
+  log("livecss.clear", { host: livecssHost });
   livecssEditor.value = "";
   const key = "livecss_" + livecssHost;
   await chrome.storage.local.remove(key);
@@ -607,6 +733,7 @@ livecssClear.addEventListener("click", async () => {
   if (tab) {
     chrome.tabs.sendMessage(tab.id, { type: "livecss_update", css: "" }).catch(() => {});
   }
+  notifyOk("CSS cleared for " + livecssHost);
 });
 
 // ═══════════════════════════════════
@@ -687,15 +814,24 @@ for (const s of FOCUS_SITES) {
   if (!el) continue;
   el.addEventListener("change", async () => {
     const enabled = el.checked;
+    log("focus." + s.elId, { enabled, storageKey: s.storageKey });
     await chrome.storage.local.set({ [s.storageKey]: enabled });
+    let tabsFound = 0;
     try {
       const tabs = await chrome.tabs.query({ url: s.urlPatterns });
+      tabsFound = tabs.length;
       for (const t of tabs) {
         const msg = { type: s.msgType, enabled };
         if (s.nfeSite) msg.site = s.nfeSite;
-        chrome.tabs.sendMessage(t.id, msg).catch(() => {});
+        chrome.tabs.sendMessage(t.id, msg).catch((e) => {
+          logWarn("focus.sendMessage.fail", { tabId: t.id, error: e && e.message });
+        });
       }
-    } catch (_) {}
+    } catch (err) {
+      logError("focus.tabs.query.fail", { error: err.message });
+    }
+    const label = el.closest(".focus-row").querySelector(".focus-site").textContent;
+    notify(label + " " + (enabled ? "ON" : "OFF") + (tabsFound ? ` (${tabsFound} tab${tabsFound > 1 ? "s" : ""})` : ""), enabled ? "ok" : "info");
   });
 }
 
@@ -735,9 +871,14 @@ function updateJsUI(enabled) {
 
 jsToggle.addEventListener("change", async () => {
   const enabled = jsToggle.checked;
+  log("jstoggle", { host: jsHost, enabled });
   updateJsUI(enabled);
 
-  if (!chrome.contentSettings || !chrome.contentSettings.javascript) return;
+  if (!chrome.contentSettings || !chrome.contentSettings.javascript) {
+    logError("jstoggle.unsupported");
+    notifyErr("contentSettings API unavailable");
+    return;
+  }
   const pattern = `https://${jsHost}/*`;
   chrome.contentSettings.javascript.set({
     primaryPattern: pattern,
@@ -749,6 +890,7 @@ jsToggle.addEventListener("change", async () => {
     setting: enabled ? "allow" : "block",
   });
 
+  notify("JS " + (enabled ? "enabled" : "blocked") + " for " + jsHost + " — reloading…", enabled ? "ok" : "info");
   // Reload the tab so the change takes effect
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab) chrome.tabs.reload(tab.id);
@@ -761,7 +903,11 @@ const pipBtn = document.getElementById("pipBtn");
 const pipLabel = document.getElementById("pipLabel");
 const pipStatus = document.getElementById("pipStatus");
 
-pipBtn.addEventListener("click", enterPiP);
+pipBtn.addEventListener("click", () => {
+  log("pip.click");
+  enterPiP();
+  // no-notify: enterPiP() emits notifications for its various outcomes
+});
 
 async function enterPiP() {
   pipStatus.textContent = "";
@@ -771,29 +917,38 @@ async function enterPiP() {
   if (!tab) {
     pipStatus.textContent = "No active tab";
     pipStatus.className = "pip-status err";
+    logError("pip.noTab");
+    notifyErr("No active tab");
     return;
   }
 
   try {
     const result = await chrome.runtime.sendMessage({ type: "pip", tabId: tab.id });
+    logInfo("pip.result", result);
     if (!result) {
       pipStatus.textContent = "Could not access page";
       pipStatus.className = "pip-status err";
+      notifyErr("Could not access page");
     } else if (result.error) {
       pipStatus.textContent = result.error;
       pipStatus.className = "pip-status err";
+      notifyErr(result.error);
     } else if (result.action === "entered") {
       pipStatus.textContent = "Video in Picture-in-Picture";
       pipStatus.className = "pip-status ok";
       pipBtn.classList.add("active");
+      notifyOk("Entered Picture-in-Picture");
     } else if (result.action === "exited") {
       pipStatus.textContent = "Exited Picture-in-Picture";
       pipStatus.className = "pip-status ok";
       pipBtn.classList.remove("active");
+      notifyOk("Exited Picture-in-Picture");
     }
   } catch (err) {
     pipStatus.textContent = err.message;
     pipStatus.className = "pip-status err";
+    logError("pip.fail", { error: err.message });
+    notifyErr(err.message);
   }
 }
 
@@ -817,6 +972,7 @@ function updateJsonFormatUI(on) {
 
 jsonformatToggle.addEventListener("change", async () => {
   const enabled = jsonformatToggle.checked;
+  log("jsonformat.toggle", { enabled });
   updateJsonFormatUI(enabled);
   await chrome.storage.local.set({ jsonformat_enabled: enabled });
 
@@ -824,6 +980,7 @@ jsonformatToggle.addEventListener("change", async () => {
   if (tab) {
     chrome.tabs.sendMessage(tab.id, { type: "jsonformat_toggle", enabled }).catch(() => {});
   }
+  notify("JSON formatter " + (enabled ? "ON" : "OFF"), enabled ? "ok" : "info");
 });
 
 // ═══════════════════════════════════
@@ -867,46 +1024,83 @@ async function findOrCreateReadingFolder() {
     }
   }
   for (const root of tree) walk(root, false);
-  if (preferred) return preferred.id;
-  if (fallback) return fallback.id;
+  if (preferred) {
+    logInfo("quick.reading.folderFound", { id: preferred.id, parent: preferred.parentId, location: "bookmarks-bar" });
+    return preferred.id;
+  }
+  if (fallback) {
+    logInfo("quick.reading.folderFound", { id: fallback.id, parent: fallback.parentId, location: "fallback" });
+    return fallback.id;
+  }
   // Create under the bookmarks bar (id "1")
+  logInfo("quick.reading.folderCreating", { parentId: "1" });
   const created = await chrome.bookmarks.create({ parentId: "1", title: READING_FOLDER_NAME });
+  logInfo("quick.reading.folderCreated", { id: created.id });
   return created.id;
 }
 
 document.getElementById("qbReading").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  log("quick.reading.click");
   try {
+    // Permission diagnostic: chrome.bookmarks is undefined when the
+    // `bookmarks` permission hasn't been granted. This happens when the
+    // extension was loaded before the permission was added to manifest.json
+    // and the user clicked "Reload" instead of removing + re-adding it.
+    if (!chrome.bookmarks) {
+      logError("quick.reading.permissionMissing");
+      setQuickStatus("Bookmarks permission missing", "err");
+      notifyErr("Bookmarks permission not granted — remove extension at chrome://extensions and load it again");
+      return;
+    }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url) { setQuickStatus("No active tab", "err"); return; }
+    logInfo("quick.reading.activeTab", { url: tab && tab.url, title: tab && tab.title });
+    if (!tab || !tab.url) {
+      setQuickStatus("No active tab", "err");
+      notifyErr("No active tab");
+      return;
+    }
     if (/^chrome:\/\//.test(tab.url) || /^chrome-extension:\/\//.test(tab.url)) {
       setQuickStatus("Can't bookmark Chrome internal pages", "err");
+      notifyErr("Can't bookmark Chrome internal pages");
       return;
     }
     const parentId = await findOrCreateReadingFolder();
+    logInfo("quick.reading.folder", { parentId });
     // Avoid creating a duplicate if the same URL already lives in the folder.
     const existing = await chrome.bookmarks.search({ url: tab.url });
     const already = existing.find((b) => b.parentId === parentId);
     if (already) {
       setQuickStatus("Already saved", "ok");
       flashButton(btn);
+      notify("Already in Reading Material", "info");
       return;
     }
-    await chrome.bookmarks.create({ parentId, title: tab.title || tab.url, url: tab.url });
+    const created = await chrome.bookmarks.create({ parentId, title: tab.title || tab.url, url: tab.url });
+    logInfo("quick.reading.created", { id: created.id, parentId: created.parentId });
     setQuickStatus("Saved to Reading Material", "ok");
     flashButton(btn);
+    notifyOk("Saved to Reading Material");
   } catch (err) {
+    logError("quick.reading.fail", { error: err.message, stack: err.stack });
     setQuickStatus(err.message || "Failed to save", "err");
+    notifyErr("Save failed: " + (err.message || "unknown error"));
   }
 });
 
 document.getElementById("qbMarkdown").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  log("quick.markdown.click");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (!tab || !tab.id) {
+      setQuickStatus("No active tab", "err");
+      notifyErr("No active tab");
+      return;
+    }
     if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
       setQuickStatus("Can't read Chrome internal pages", "err");
+      notifyErr("Can't read Chrome internal pages");
       return;
     }
 
@@ -915,16 +1109,21 @@ document.getElementById("qbMarkdown").addEventListener("click", async (e) => {
       func: extractMarkdownFromPage,
     });
     const out = results && results[0] && results[0].result;
+    logInfo("quick.markdown.result", { source: out && out.source, length: out && out.md && out.md.length });
     if (!out || !out.md) {
       setQuickStatus("Nothing to convert", "err");
+      notifyErr("Nothing to convert");
       return;
     }
     await navigator.clipboard.writeText(out.md);
     const label = out.source === "selection" ? "Selection copied" : "Article copied";
     setQuickStatus(`${label} (${out.md.length} chars)`, "ok");
     flashButton(btn);
+    notifyOk(`${label} as markdown — ${out.md.length} chars`);
   } catch (err) {
+    logError("quick.markdown.fail", { error: err.message });
     setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Markdown copy failed: " + (err.message || "unknown"));
   }
 });
 
@@ -1018,27 +1217,39 @@ function extractMarkdownFromPage() {
 
 document.getElementById("qbPickColor").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  log("quick.pickColor.click");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (!tab || !tab.id) {
+      setQuickStatus("No active tab", "err");
+      notifyErr("No active tab");
+      return;
+    }
     if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
       setQuickStatus("Can't pick on Chrome pages", "err");
+      notifyErr("Can't pick on Chrome pages");
       return;
     }
     setQuickStatus("Click anywhere on the page…", "ok");
+    notify("Click anywhere on the page…", "info");
     const res = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: pickColorInPage,
     });
     const r = res && res[0] && res[0].result;
+    logInfo("quick.pickColor.result", r);
     if (r && r.hex) {
       setQuickStatus(`Picked ${r.hex} — copied`, "ok");
       flashButton(btn);
+      notifyOk(`Picked ${r.hex} — copied`);
     } else if (r && r.error) {
       setQuickStatus(r.error, "err");
+      notifyErr(r.error);
     }
   } catch (err) {
+    logError("quick.pickColor.fail", { error: err.message });
     setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Pick color failed: " + (err.message || "unknown"));
   }
 });
 
@@ -1072,11 +1283,17 @@ async function pickColorInPage() {
 
 document.getElementById("qbFillForm").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  log("quick.fillForm.click");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) { setQuickStatus("No active tab", "err"); return; }
+    if (!tab || !tab.id) {
+      setQuickStatus("No active tab", "err");
+      notifyErr("No active tab");
+      return;
+    }
     if (/^chrome:\/\//.test(tab.url || "") || /^chrome-extension:\/\//.test(tab.url || "")) {
       setQuickStatus("Can't fill on Chrome pages", "err");
+      notifyErr("Can't fill on Chrome pages");
       return;
     }
     const res = await chrome.scripting.executeScript({
@@ -1084,14 +1301,19 @@ document.getElementById("qbFillForm").addEventListener("click", async (e) => {
       func: fillFormsInPage,
     });
     const total = (res || []).reduce((acc, r) => acc + ((r && r.result && r.result.filled) || 0), 0);
+    logInfo("quick.fillForm.result", { totalFilled: total, frames: (res || []).length });
     if (total > 0) {
       setQuickStatus(`Filled ${total} field${total === 1 ? "" : "s"}`, "ok");
       flashButton(btn);
+      notifyOk(`Filled ${total} field${total === 1 ? "" : "s"}`);
     } else {
       setQuickStatus("No fillable fields found", "err");
+      notify("No fillable fields found", "info");
     }
   } catch (err) {
+    logError("quick.fillForm.fail", { error: err.message });
     setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Fill failed: " + (err.message || "unknown"));
   }
 });
 
@@ -1227,9 +1449,13 @@ function fillFormsInPage() {
 
 document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  log("quick.calEvent.click");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
+    if (!tab) {
+      notifyErr("No active tab");
+      return;
+    }
     let selection = "";
     if (tab.id && tab.url && !/^chrome:\/\//.test(tab.url) && !/^chrome-extension:\/\//.test(tab.url)) {
       try {
@@ -1238,8 +1464,11 @@ document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
           func: () => (window.getSelection() ? window.getSelection().toString().trim() : ""),
         });
         selection = (res && res[0] && res[0].result) || "";
-      } catch (_) {}
+      } catch (err) {
+        logWarn("quick.calEvent.selectionFail", { error: err.message });
+      }
     }
+    logInfo("quick.calEvent.selection", { length: selection.length, hasSelection: !!selection });
     const params = new URLSearchParams();
     if (selection) params.set("text", selection.slice(0, 1024));
     const details = [tab.title, tab.url].filter(Boolean).join("\n");
@@ -1248,17 +1477,24 @@ document.getElementById("qbCalEvent").addEventListener("click", async (e) => {
       url: "https://calendar.google.com/calendar/u/0/r/eventedit?" + params.toString(),
     });
     flashButton(btn);
+    notifyOk(selection ? "Calendar event opened with selection" : "Calendar event opened");
   } catch (err) {
+    logError("quick.calEvent.fail", { error: err.message });
     setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Calendar event failed: " + (err.message || "unknown"));
   }
 });
 
 document.getElementById("qbCalToday").addEventListener("click", async (e) => {
+  log("quick.calToday.click");
   try {
     await chrome.tabs.create({ url: "https://calendar.google.com/calendar/u/0/r/day" });
     flashButton(e.currentTarget);
+    notifyOk("Opened today's Calendar");
   } catch (err) {
+    logError("quick.calToday.fail", { error: err.message });
     setQuickStatus(err.message || "Failed", "err");
+    notifyErr("Calendar open failed: " + (err.message || "unknown"));
   }
 });
 
@@ -1266,7 +1502,11 @@ document.getElementById("qbCalToday").addEventListener("click", async (e) => {
 //  Localhost Port Jumper
 // ═══════════════════════════════════
 const localhostListEl = document.getElementById("localhostList");
-document.getElementById("lhRefresh").addEventListener("click", () => loadLocalhost());
+document.getElementById("lhRefresh").addEventListener("click", () => {
+  log("localhost.refresh");
+  notify("Refreshing localhost history…", "info");
+  loadLocalhost();
+});
 
 async function loadLocalhost() {
   localhostListEl.innerHTML = '<div class="empty">Loading...</div>';
@@ -1341,6 +1581,8 @@ async function loadLocalhost() {
     localhostListEl.querySelectorAll(".localhost-item").forEach((a) => {
       a.addEventListener("click", (e) => {
         e.preventDefault();
+        log("localhost.open", { url: a.dataset.url });
+        notify("Opening " + a.dataset.url, "info");
         chrome.tabs.create({ url: a.dataset.url });
       });
     });

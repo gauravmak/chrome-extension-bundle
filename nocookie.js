@@ -129,6 +129,7 @@
         const el = document.querySelector(sel);
         if (el && el.offsetParent !== null) {
           el.click();
+          SL.log.action("nocookie", "dismissed", { selector: sel, host: location.host });
           return true;
         }
       } catch {}
@@ -138,10 +139,11 @@
 
   function removeCSS() {
     const el = document.getElementById(STYLE_ID);
-    if (el) el.remove();
+    if (el) { el.remove(); SL.log.action("nocookie", "remove", { host: location.host }); }
   }
 
   function activate() {
+    SL.log.action("nocookie", "activate", { host: location.host });
     injectCSS();
     setTimeout(tryClick, 500);
     setTimeout(tryClick, 1500);
@@ -151,12 +153,14 @@
 
   // Check storage and apply
   chrome.storage.local.get(["nocookie_enabled"], (data) => {
+    SL.log.info("nocookie", "init", { enabled: data.nocookie_enabled !== false });
     if (data.nocookie_enabled !== false) activate();
   });
 
   // Listen for toggle from popup
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "nocookie_toggle") {
+      SL.log.info("nocookie", "msg.toggle", { enabled: msg.enabled });
       if (msg.enabled) activate();
       else removeCSS();
     }

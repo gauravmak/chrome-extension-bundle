@@ -3,6 +3,7 @@
 //  Adds a floating "View Image" button on the image preview panel
 // ═══════════════════════════════════
 (() => {
+  SL.log.info("viewimage", "init", { host: location.host });
   const BUTTON_CLASS = "sl-view-image";
 
   const style = document.createElement("style");

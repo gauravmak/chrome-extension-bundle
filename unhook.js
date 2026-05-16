@@ -74,19 +74,22 @@
     style.id = STYLE_ID;
     style.textContent = UNHOOK_CSS;
     (document.head || document.documentElement).appendChild(style);
+    SL.log.action("unhook", "inject", { host: location.host });
   }
 
   function remove() {
     const el = document.getElementById(STYLE_ID);
-    if (el) el.remove();
+    if (el) { el.remove(); SL.log.action("unhook", "remove", { host: location.host }); }
   }
 
   chrome.storage.local.get(["unhook_enabled"], (data) => {
+    SL.log.info("unhook", "init", { enabled: data.unhook_enabled !== false });
     if (data.unhook_enabled !== false) inject();
   });
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "unhook_toggle") {
+      SL.log.info("unhook", "msg.toggle", { enabled: msg.enabled });
       if (msg.enabled) inject();
       else remove();
     }

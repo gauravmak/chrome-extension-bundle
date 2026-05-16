@@ -194,6 +194,7 @@
     const copyBtn = document.createElement("button");
     copyBtn.textContent = "Copy";
     copyBtn.addEventListener("click", () => {
+      SL.log.action("jsonformat", "copy", { size: raw.length });
       navigator.clipboard.writeText(JSON.stringify(parsed, null, 2)).then(() => {
         copyBtn.textContent = "Copied!";
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
@@ -203,6 +204,7 @@
     const rawBtn = document.createElement("button");
     rawBtn.textContent = "Raw";
     rawBtn.addEventListener("click", () => {
+      SL.log.action("jsonformat", "raw");
       const el = document.getElementById(STYLE_ID);
       if (el) el.remove();
       document.body.innerHTML = "";
@@ -216,6 +218,7 @@
     collapseBtn.addEventListener("click", () => {
       const all = document.querySelectorAll(".sl-jf-toggle");
       const shouldCollapse = collapseBtn.textContent === "Collapse All";
+      SL.log.action("jsonformat", "collapseAll", { collapse: shouldCollapse });
       all.forEach((t) => {
         t.dataset.collapsed = shouldCollapse ? "true" : "false";
         const block = t.nextElementSibling;
@@ -242,6 +245,7 @@
       const toggle = e.target.closest(".sl-jf-toggle");
       if (!toggle) return;
       const collapsed = toggle.dataset.collapsed === "true";
+      SL.log.info("jsonformat", "node.toggle", { collapsed: !collapsed });
       toggle.dataset.collapsed = collapsed ? "false" : "true";
       const block = toggle.nextElementSibling;
       const ellipsis = block.nextElementSibling;
@@ -252,12 +256,14 @@
 
   function removeFormat() {
     const el = document.getElementById(STYLE_ID);
-    if (el) el.remove();
+    if (el) { el.remove(); SL.log.action("jsonformat", "remove"); }
   }
 
   // Check storage and apply
   chrome.storage.local.get(["jsonformat_enabled"], (data) => {
+    SL.log.info("jsonformat", "init", { enabled: data.jsonformat_enabled !== false, isJsonPage: isJsonPage() });
     if (data.jsonformat_enabled !== false && isJsonPage()) {
+      SL.log.action("jsonformat", "apply", { url: location.href });
       applyJsonFormat();
     }
   });
@@ -265,6 +271,7 @@
   // Listen for toggle from popup
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "jsonformat_toggle") {
+      SL.log.info("jsonformat", "msg.toggle", { enabled: msg.enabled });
       if (msg.enabled && isJsonPage()) applyJsonFormat();
       else removeFormat();
     }

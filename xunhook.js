@@ -28,19 +28,22 @@
     style.id = STYLE_ID;
     style.textContent = XUNHOOK_CSS;
     (document.head || document.documentElement).appendChild(style);
+    SL.log.action("xunhook", "inject", { host: location.host });
   }
 
   function remove() {
     const el = document.getElementById(STYLE_ID);
-    if (el) el.remove();
+    if (el) { el.remove(); SL.log.action("xunhook", "remove", { host: location.host }); }
   }
 
   chrome.storage.local.get(["xunhook_enabled"], (data) => {
+    SL.log.info("xunhook", "init", { enabled: data.xunhook_enabled !== false });
     if (data.xunhook_enabled !== false) inject();
   });
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "xunhook_toggle") {
+      SL.log.info("xunhook", "msg.toggle", { enabled: msg.enabled });
       if (msg.enabled) inject();
       else remove();
     }
