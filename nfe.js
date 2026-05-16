@@ -1,6 +1,7 @@
 // ═══════════════════════════════════
 //  superlevels: News Feed Eradicator
 //  Hides infinite feeds on LinkedIn, X (home), Facebook, Reddit
+//  One storage key per site (nfe_linkedin, nfe_x, nfe_facebook, nfe_reddit)
 // ═══════════════════════════════════
 (() => {
   const STYLE_ID = "sl-nfe";
@@ -38,11 +39,13 @@
     ],
   };
 
+  const SITE = hostKey();
+  const STORAGE_KEY = SITE ? "nfe_" + SITE : null;
+
   function inject() {
+    if (!SITE) return;
     if (document.getElementById(STYLE_ID)) return;
-    const k = hostKey();
-    if (!k) return;
-    const sels = SELECTORS[k];
+    const sels = SELECTORS[SITE];
     if (!sels || !sels.length) return;
     const style = document.createElement("style");
     style.id = STYLE_ID;
@@ -55,14 +58,16 @@
     if (el) el.remove();
   }
 
-  chrome.storage.local.get(["nfe_enabled"], (data) => {
-    if (data.nfe_enabled === true) inject();
-  });
+  if (STORAGE_KEY) {
+    chrome.storage.local.get([STORAGE_KEY], (data) => {
+      if (data[STORAGE_KEY] === true) inject();
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && msg.type === "nfe_toggle") {
-      if (msg.enabled) inject();
-      else remove();
-    }
+    if (!msg || msg.type !== "nfe_toggle") return;
+    if (msg.site && msg.site !== SITE) return;
+    if (msg.enabled) inject();
+    else remove();
   });
 })();

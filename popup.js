@@ -11,15 +11,12 @@ function switchToPage(page) {
   if (page === "cookies") loadCookies();
   if (page === "redirects") loadRedirects();
   if (page === "darkmode") loadDarkMode();
-  if (page === "xdim") loadXDim();
   if (page === "jstoggle") loadJsToggle();
   if (page === "nocookie") loadNoCookie();
   if (page === "livecss") loadLiveCSS();
-  if (page === "unhook") loadUnhook();
-  if (page === "xunhook") loadXUnhook();
+  if (page === "focus") loadFocus();
   if (page === "jsonformat") loadJsonFormat();
   if (page === "localhost") loadLocalhost();
-  if (page === "nfe") loadNFE();
   chrome.storage.local.set({ last_tab: page });
 }
 
@@ -525,103 +522,6 @@ scopeGlobal.addEventListener("click", () => {
 });
 
 // ═══════════════════════════════════
-//  X Dim Mode
-// ═══════════════════════════════════
-const xdimToggle = document.getElementById("xdimToggle");
-const xdimStatus = document.getElementById("xdimStatus");
-const xdimPreview = document.getElementById("xdimPreview");
-const xdimHueSlider = document.getElementById("xdimHueSlider");
-const xdimHueVal = document.getElementById("xdimHueVal");
-const xdimCustomHueSection = document.getElementById("xdimCustomHueSection");
-const xdimDots = document.querySelectorAll(".xdim-dot");
-
-const XDIM_THEMES = {
-  dim:   { hue: 210, sat: 34 },
-  slate: { hue: 210, sat: 8  },
-  jade:  { hue: 150, sat: 34 },
-  plum:  { hue: 270, sat: 34 },
-  dusk:  { hue: 330, sat: 34 },
-  ember: { hue: 25,  sat: 34 },
-};
-
-let xdimTheme = "dim";
-let xdimCustomHue = 210;
-
-async function loadXDim() {
-  const data = await chrome.storage.local.get(["xdim_enabled", "xdim_theme", "xdim_customHue"]);
-  const enabled = data.xdim_enabled || false;
-  xdimTheme = data.xdim_theme || "dim";
-  xdimCustomHue = data.xdim_customHue || 210;
-
-  xdimToggle.checked = enabled;
-  xdimHueSlider.value = xdimCustomHue;
-  xdimHueVal.textContent = xdimCustomHue + "°";
-
-  updateXDimStatus(enabled);
-  updateXDimThemeDots();
-  updateXDimPreview();
-}
-
-function updateXDimStatus(on) {
-  xdimStatus.textContent = on ? "ON" : "OFF";
-  xdimStatus.className = "status " + (on ? "on" : "off");
-}
-
-function updateXDimThemeDots() {
-  xdimDots.forEach((dot) => {
-    dot.classList.toggle("active", dot.dataset.theme === xdimTheme);
-  });
-  xdimCustomHueSection.classList.toggle("show", xdimTheme === "custom");
-}
-
-function getXDimHueSat() {
-  if (xdimTheme === "custom") return { hue: xdimCustomHue, sat: 34 };
-  return XDIM_THEMES[xdimTheme] || XDIM_THEMES.dim;
-}
-
-function updateXDimPreview() {
-  const { hue: h, sat: s } = getXDimHueSat();
-  const bSat = Math.round(s * 0.47);
-  const bar = xdimPreview.querySelector(".xdim-preview-bar");
-  const tweet = xdimPreview.querySelector(".xdim-preview-tweet");
-  bar.style.background = `hsl(${h}, ${s}%, 16%)`;
-  bar.style.color = `hsl(${h}, ${Math.round(s * 0.32)}%, 60%)`;
-  tweet.style.background = `hsl(${h}, ${s}%, 13%)`;
-  tweet.style.color = `hsl(${h}, ${Math.round(s * 0.32)}%, 60%)`;
-  tweet.style.borderColor = `hsl(${h}, ${bSat}%, 26%)`;
-}
-
-xdimToggle.addEventListener("change", async () => {
-  const enabled = xdimToggle.checked;
-  updateXDimStatus(enabled);
-  await chrome.storage.local.set({ xdim_enabled: enabled });
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab) {
-    chrome.tabs.sendMessage(tab.id, { type: "xdim_toggle", enabled }).catch(() => {});
-  }
-});
-
-xdimDots.forEach((dot) => {
-  dot.addEventListener("click", async () => {
-    xdimTheme = dot.dataset.theme;
-    updateXDimThemeDots();
-    updateXDimPreview();
-    await chrome.storage.local.set({ xdim_theme: xdimTheme });
-  });
-});
-
-xdimHueSlider.addEventListener("input", () => {
-  xdimCustomHue = parseInt(xdimHueSlider.value);
-  xdimHueVal.textContent = xdimCustomHue + "°";
-  updateXDimPreview();
-});
-xdimHueSlider.addEventListener("change", async () => {
-  xdimCustomHue = parseInt(xdimHueSlider.value);
-  await chrome.storage.local.set({ xdim_customHue: xdimCustomHue });
-});
-
-// ═══════════════════════════════════
 //  Cookie Consent (GDPR) Dismisser
 // ═══════════════════════════════════
 const nocookieToggle = document.getElementById("nocookieToggle");
@@ -710,99 +610,94 @@ livecssClear.addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════
-//  YouTube Unhook
+//  Focus Mode — unified hide-distractions per site
 // ═══════════════════════════════════
-const unhookToggle = document.getElementById("unhookToggle");
-const unhookStatus = document.getElementById("unhookStatus");
+// Storage keys:
+//   unhook_enabled       (default ON)   → YouTube unhook.js
+//   xunhook_enabled      (default ON)   → X sidebar xunhook.js
+//   nfe_x                (default OFF)  → X home timeline nfe.js
+//   nfe_linkedin         (default OFF)  → LinkedIn feed nfe.js
+//   nfe_facebook         (default OFF)  → Facebook feed nfe.js
+//   nfe_reddit           (default OFF)  → Reddit feed nfe.js
 
-async function loadUnhook() {
-  const data = await chrome.storage.local.get(["unhook_enabled"]);
-  const enabled = data.unhook_enabled !== false;
-  unhookToggle.checked = enabled;
-  updateUnhookUI(enabled);
-}
+const FOCUS_SITES = [
+  {
+    elId: "focusYoutube",
+    storageKey: "unhook_enabled",
+    defaultOn: true,
+    msgType: "unhook_toggle",
+    nfeSite: null,
+    urlPatterns: ["*://www.youtube.com/*", "*://m.youtube.com/*"],
+  },
+  {
+    elId: "focusXSidebar",
+    storageKey: "xunhook_enabled",
+    defaultOn: true,
+    msgType: "xunhook_toggle",
+    nfeSite: null,
+    urlPatterns: ["*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*"],
+  },
+  {
+    elId: "focusXTimeline",
+    storageKey: "nfe_x",
+    defaultOn: false,
+    msgType: "nfe_toggle",
+    nfeSite: "x",
+    urlPatterns: ["*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*"],
+  },
+  {
+    elId: "focusLinkedin",
+    storageKey: "nfe_linkedin",
+    defaultOn: false,
+    msgType: "nfe_toggle",
+    nfeSite: "linkedin",
+    urlPatterns: ["*://*.linkedin.com/*"],
+  },
+  {
+    elId: "focusFacebook",
+    storageKey: "nfe_facebook",
+    defaultOn: false,
+    msgType: "nfe_toggle",
+    nfeSite: "facebook",
+    urlPatterns: ["*://*.facebook.com/*"],
+  },
+  {
+    elId: "focusReddit",
+    storageKey: "nfe_reddit",
+    defaultOn: false,
+    msgType: "nfe_toggle",
+    nfeSite: "reddit",
+    urlPatterns: ["*://*.reddit.com/*"],
+  },
+];
 
-function updateUnhookUI(on) {
-  unhookStatus.textContent = on ? "ON" : "OFF";
-  unhookStatus.className = "status " + (on ? "on" : "off");
-}
-
-unhookToggle.addEventListener("change", async () => {
-  const enabled = unhookToggle.checked;
-  updateUnhookUI(enabled);
-  await chrome.storage.local.set({ unhook_enabled: enabled });
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab) {
-    chrome.tabs.sendMessage(tab.id, { type: "unhook_toggle", enabled }).catch(() => {});
+async function loadFocus() {
+  const keys = FOCUS_SITES.map((s) => s.storageKey);
+  const data = await chrome.storage.local.get(keys);
+  for (const s of FOCUS_SITES) {
+    const stored = data[s.storageKey];
+    const enabled = stored === undefined ? s.defaultOn : stored === true;
+    const el = document.getElementById(s.elId);
+    if (el) el.checked = enabled;
   }
-});
-
-// ═══════════════════════════════════
-//  X Unhook
-// ═══════════════════════════════════
-const xunhookToggle = document.getElementById("xunhookToggle");
-const xunhookStatus = document.getElementById("xunhookStatus");
-
-async function loadXUnhook() {
-  const data = await chrome.storage.local.get(["xunhook_enabled"]);
-  const enabled = data.xunhook_enabled !== false;
-  xunhookToggle.checked = enabled;
-  updateXUnhookUI(enabled);
 }
 
-function updateXUnhookUI(on) {
-  xunhookStatus.textContent = on ? "ON" : "OFF";
-  xunhookStatus.className = "status " + (on ? "on" : "off");
-}
-
-xunhookToggle.addEventListener("change", async () => {
-  const enabled = xunhookToggle.checked;
-  updateXUnhookUI(enabled);
-  await chrome.storage.local.set({ xunhook_enabled: enabled });
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab) {
-    chrome.tabs.sendMessage(tab.id, { type: "xunhook_toggle", enabled }).catch(() => {});
-  }
-});
-
-// ═══════════════════════════════════
-//  News Feed Eradicator
-// ═══════════════════════════════════
-const nfeToggle = document.getElementById("nfeToggle");
-const nfeStatus = document.getElementById("nfeStatus");
-
-async function loadNFE() {
-  const data = await chrome.storage.local.get(["nfe_enabled"]);
-  const enabled = data.nfe_enabled === true;
-  nfeToggle.checked = enabled;
-  updateNfeUI(enabled);
-}
-
-function updateNfeUI(on) {
-  nfeStatus.textContent = on ? "ON" : "OFF";
-  nfeStatus.className = "status " + (on ? "on" : "off");
-}
-
-nfeToggle.addEventListener("change", async () => {
-  const enabled = nfeToggle.checked;
-  updateNfeUI(enabled);
-  await chrome.storage.local.set({ nfe_enabled: enabled });
-  // Broadcast to any currently-open tab that has the content script.
-  const tabs = await chrome.tabs.query({
-    url: [
-      "*://*.linkedin.com/*",
-      "*://x.com/*", "*://twitter.com/*",
-      "*://mobile.x.com/*", "*://mobile.twitter.com/*",
-      "*://*.facebook.com/*",
-      "*://*.reddit.com/*",
-    ],
+for (const s of FOCUS_SITES) {
+  const el = document.getElementById(s.elId);
+  if (!el) continue;
+  el.addEventListener("change", async () => {
+    const enabled = el.checked;
+    await chrome.storage.local.set({ [s.storageKey]: enabled });
+    try {
+      const tabs = await chrome.tabs.query({ url: s.urlPatterns });
+      for (const t of tabs) {
+        const msg = { type: s.msgType, enabled };
+        if (s.nfeSite) msg.site = s.nfeSite;
+        chrome.tabs.sendMessage(t.id, msg).catch(() => {});
+      }
+    } catch (_) {}
   });
-  for (const t of tabs) {
-    chrome.tabs.sendMessage(t.id, { type: "nfe_toggle", enabled }).catch(() => {});
-  }
-});
+}
 
 // ═══════════════════════════════════
 //  JavaScript Toggle

@@ -24,12 +24,12 @@
       flex-shrink: 0;
     }
     .nav button {
-      width: calc(100% / 8);
+      width: calc(100% / 6);
       padding: 9px 2px;
       background: none;
       border: none;
       color: #888;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
       cursor: pointer;
       border-bottom: 2px solid transparent;
@@ -364,92 +364,30 @@
       background: #2a1525;
     }
 
-    /* ── X Dim Mode ── */
-    .xdim-big-toggle {
-      display: flex; flex-direction: column; align-items: center;
-      padding: 24px 0 16px; gap: 12px;
-    }
-    .xdim-big-toggle .xlogo {
-      font-size: 44px; line-height: 1; font-weight: 800;
-      font-family: -apple-system, sans-serif;
-    }
-    .xdim-themes {
-      padding: 10px 12px; background: #16213e;
-      border-radius: 8px; margin-bottom: 10px;
-    }
-    .xdim-themes label {
-      display: block; font-size: 12px; color: #888;
-      margin-bottom: 8px;
-    }
-    .xdim-theme-dots {
-      display: flex; gap: 10px; align-items: center;
-      flex-wrap: wrap;
-    }
-    .xdim-dot {
-      width: 28px; height: 28px; border-radius: 50%;
-      border: 2px solid transparent; cursor: pointer;
-      transition: border-color 0.2s, transform 0.15s;
-      position: relative;
-    }
-    .xdim-dot:hover { transform: scale(1.15); }
-    .xdim-dot.active { border-color: #fff; }
-    .xdim-dot[data-theme="dim"]   { background: hsl(210, 34%, 13%); }
-    .xdim-dot[data-theme="slate"] { background: hsl(210, 8%, 13%); }
-    .xdim-dot[data-theme="jade"]  { background: hsl(150, 34%, 13%); }
-    .xdim-dot[data-theme="plum"]  { background: hsl(270, 34%, 13%); }
-    .xdim-dot[data-theme="dusk"]  { background: hsl(330, 34%, 13%); }
-    .xdim-dot[data-theme="ember"] { background: hsl(25, 34%, 13%); }
-    .xdim-dot[data-theme="custom"] {
-      background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red);
-    }
-    .xdim-custom-hue {
-      padding: 10px 12px; background: #16213e;
-      border-radius: 8px; margin-bottom: 10px;
-      display: none;
-    }
-    .xdim-custom-hue.show { display: block; }
-    .xdim-custom-hue label {
-      display: block; font-size: 12px; color: #888;
-      margin-bottom: 6px;
-    }
-    .xdim-custom-hue .range-row {
-      display: flex; align-items: center; gap: 10px;
-    }
-    .xdim-custom-hue input[type="range"] {
-      flex: 1; height: 4px;
-      -webkit-appearance: none; appearance: none;
-      background: linear-gradient(to right, red, yellow, lime, aqua, blue, magenta, red);
-      border-radius: 2px; outline: none;
-    }
-    .xdim-custom-hue input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none; appearance: none;
-      width: 14px; height: 14px; border-radius: 50%;
-      background: #fff; border: 2px solid #333;
-      cursor: pointer;
-    }
-    .xdim-custom-hue .range-val {
-      font-size: 12px; color: #aaa; min-width: 36px;
-      text-align: right;
-    }
-    .xdim-preview {
-      margin: 0 0 14px;
-      border-radius: 8px; overflow: hidden;
-      border: 1px solid #2a2a4a;
-    }
-    .xdim-preview-bar {
-      padding: 8px 12px; font-size: 11px; font-weight: 600;
-      display: flex; align-items: center; gap: 6px;
-      transition: background 0.3s, color 0.3s;
-    }
-    .xdim-preview-bar .dot { width: 6px; height: 6px; border-radius: 50%; background: #1da1f2; }
-    .xdim-preview-tweet {
-      padding: 10px 12px; font-size: 11px; line-height: 1.5;
-      border-top: 1px solid;
-      transition: background 0.3s, color 0.3s, border-color 0.3s;
-    }
     .xdim-note {
       font-size: 11px; color: #555; text-align: center;
       padding: 8px; line-height: 1.5;
+    }
+
+    /* ── Focus Mode ── */
+    .focus-intro {
+      font-size: 12px; color: #888;
+      margin-bottom: 12px; line-height: 1.5;
+    }
+    .focus-row {
+      display: flex; align-items: center;
+      padding: 10px 12px; background: #16213e;
+      border-radius: 8px; margin-bottom: 6px;
+      gap: 10px;
+    }
+    .focus-row .focus-info {
+      flex: 1; min-width: 0;
+    }
+    .focus-row .focus-site {
+      font-size: 13px; font-weight: 600; color: #e0e0e0;
+    }
+    .focus-row .focus-desc {
+      font-size: 11px; color: #888; margin-top: 2px;
     }
 
     /* ── Cookie Consent (GDPR) ── */
@@ -709,10 +647,7 @@
     <button data-page="jstoggle">⚡ JS</button>
     <button data-page="tabcleaner">🚮 Tabs</button>
     <button data-page="pip">🖼 PiP</button>
-    <button data-page="unhook">📺 YT Unhook</button>
-    <button data-page="xunhook">𝕏 Unhook</button>
-    <button data-page="xdim">𝕏 Dim</button>
-    <button data-page="nfe">🚫 Feeds</button>
+    <button data-page="focus">🎯 Focus</button>
     <button data-page="jsonformat">{} JSON</button>
     <button data-page="darkmode">🌙 Dark</button>
     <button data-page="nocookie">🚫 GDPR</button>
@@ -882,108 +817,82 @@
     </div>
   </div>
 
-  <!-- ═══ X Dim Mode Page ═══ -->
-  <div class="page" id="page-xdim">
+  <!-- ═══ Focus Mode Page ═══ -->
+  <div class="page" id="page-focus">
     <div class="page-body">
-      <div class="xdim-big-toggle">
-        <div class="xlogo">𝕏</div>
-        <label class="big-switch">
-          <input type="checkbox" id="xdimToggle">
-          <span class="big-slider"></span>
+      <div class="focus-intro">
+        Hide distracting feeds and sidebars per site. Search, profiles,
+        and direct links keep working.
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">📺 YouTube</div>
+          <div class="focus-desc">No feed, no shorts, no recommendations</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusYoutube">
+          <span class="slider"></span>
         </label>
-        <div class="status off" id="xdimStatus">OFF</div>
       </div>
 
-      <div class="xdim-themes">
-        <label>Theme</label>
-        <div class="xdim-theme-dots">
-          <div class="xdim-dot active" data-theme="dim" title="Dim"></div>
-          <div class="xdim-dot" data-theme="slate" title="Slate"></div>
-          <div class="xdim-dot" data-theme="jade" title="Jade"></div>
-          <div class="xdim-dot" data-theme="plum" title="Plum"></div>
-          <div class="xdim-dot" data-theme="dusk" title="Dusk"></div>
-          <div class="xdim-dot" data-theme="ember" title="Ember"></div>
-          <div class="xdim-dot" data-theme="custom" title="Custom"></div>
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">𝕏 X / Twitter — sidebar</div>
+          <div class="focus-desc">Hide Trends, Who to follow, News panels</div>
         </div>
-      </div>
-
-      <div class="xdim-custom-hue" id="xdimCustomHueSection">
-        <label>Custom Hue</label>
-        <div class="range-row">
-          <input type="range" id="xdimHueSlider" min="0" max="360" value="210">
-          <span class="range-val" id="xdimHueVal">210°</span>
-        </div>
-      </div>
-
-      <div class="xdim-preview" id="xdimPreview">
-        <div class="xdim-preview-bar">
-          <span class="dot"></span> Preview
-        </div>
-        <div class="xdim-preview-tweet">
-          The quick brown fox jumps over the lazy dog. This is how text looks with X Dim mode.
-        </div>
-      </div>
-
-      <div class="xdim-note">
-        Applies a custom dim theme to X / Twitter.<br>
-        Choose a theme or set a custom hue for less eye strain.
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ X Unhook Page ═══ -->
-  <div class="page" id="page-xunhook">
-    <div class="page-body">
-      <div class="unhook-big-toggle">
-        <div class="yticon" style="font-weight:800;font-family:-apple-system,sans-serif;">𝕏</div>
-        <label class="big-switch">
-          <input type="checkbox" id="xunhookToggle" checked>
-          <span class="big-slider"></span>
+        <label class="switch">
+          <input type="checkbox" id="focusXSidebar">
+          <span class="slider"></span>
         </label>
-        <div class="status on" id="xunhookStatus">ON</div>
       </div>
 
-      <div class="unhook-features">
-        <div class="unhook-feature"><span class="check">✓</span> Hide sidebar panels (Trends, News, Live on X)</div>
-        <div class="unhook-feature"><span class="check">✓</span> Keep search bar at top of sidebar</div>
-        <div class="unhook-feature"><span class="check">✓</span> Hide Explore tab in left nav</div>
-        <div class="unhook-feature"><span class="check">✓</span> Hide Explore in More overflow menu</div>
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">𝕏 X / Twitter — home timeline</div>
+          <div class="focus-desc">Hide the scrolling timeline on /home</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusXTimeline">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">💼 LinkedIn</div>
+          <div class="focus-desc">Hide the home feed</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusLinkedin">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">👥 Facebook</div>
+          <div class="focus-desc">Hide news feed</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusFacebook">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">🔥 Reddit</div>
+          <div class="focus-desc">Hide front-page post list</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusReddit">
+          <span class="slider"></span>
+        </label>
       </div>
 
       <div class="xdim-note" style="margin-top:10px">
-        Removes X / Twitter distractions.<br>
-        Toggle off if a page breaks.
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ News Feed Eradicator Page ═══ -->
-  <div class="page" id="page-nfe">
-    <div class="page-body">
-      <div class="nocookie-big-toggle">
-        <div class="ncicon">🚫📰</div>
-        <label class="big-switch">
-          <input type="checkbox" id="nfeToggle">
-          <span class="big-slider"></span>
-        </label>
-        <div class="status off" id="nfeStatus">OFF</div>
-      </div>
-
-      <div class="nocookie-stats">
-        <b>Hides infinite feeds</b><br>
-        Removes the scrolling feed on these sites so you can use them on purpose:
-      </div>
-
-      <div class="unhook-features">
-        <div class="unhook-feature"><span class="check">✓</span> LinkedIn home feed</div>
-        <div class="unhook-feature"><span class="check">✓</span> X / Twitter home timeline</div>
-        <div class="unhook-feature"><span class="check">✓</span> Facebook news feed</div>
-        <div class="unhook-feature"><span class="check">✓</span> Reddit front-page posts</div>
-      </div>
-
-      <div class="xdim-note" style="margin-top:10px">
-        Search, profiles, and direct links still work.<br>
-        Toggle off if a page breaks.
+        Toggle off if any site breaks.
       </div>
     </div>
   </div>
@@ -1021,33 +930,6 @@
       <div class="livecss-btns">
         <button class="btn-save" id="livecssSave">Save</button>
         <button class="btn-del2" id="livecssClear">Clear</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ YouTube Unhook Page ═══ -->
-  <div class="page" id="page-unhook">
-    <div class="page-body">
-      <div class="unhook-big-toggle">
-        <div class="yticon">📺</div>
-        <label class="big-switch">
-          <input type="checkbox" id="unhookToggle" checked>
-          <span class="big-slider"></span>
-        </label>
-        <div class="status on" id="unhookStatus">ON</div>
-      </div>
-
-      <div class="unhook-features" id="unhookFeatures">
-        <div class="unhook-feature"><span class="check">✓</span> Black homepage — no feed</div>
-        <div class="unhook-feature"><span class="check">✓</span> No sidebar suggestions</div>
-        <div class="unhook-feature"><span class="check">✓</span> No end screen overlays</div>
-        <div class="unhook-feature"><span class="check">✓</span> No Shorts shelves</div>
-        <div class="unhook-feature"><span class="check">✓</span> Wider video player</div>
-      </div>
-
-      <div class="xdim-note" style="margin-top:10px">
-        Removes YouTube distractions.<br>
-        Search still works — just no recommendations.
       </div>
     </div>
   </div>
