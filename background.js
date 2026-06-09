@@ -303,6 +303,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //    • YouTube home                    (youtube.com/)
 //    • LinkedIn home / feed            (linkedin.com/ , /feed)
 //    • the user's own LinkedIn profile (/in/<slug>, slug configured in popup)
+//    • Facebook home / feed            (facebook.com/ , /home.php)
 //
 //  Lives in the background so it fires with the popup closed. Bookmark URLs
 //  are page-originated and therefore UNTRUSTED — we only ever navigate to an
@@ -361,6 +362,9 @@ function focusRedirectReason(rawUrl) {
     if (path === "/" || path === "/feed" || path === "/feed/") return "linkedin-home";
     if (focusRedirectLiRe && focusRedirectLiRe.test(path)) return "linkedin-profile";
   }
+  if (/(^|\.)facebook\.com$/.test(host)) {
+    if (path === "/" || path === "/home.php" || path === "/home.php/") return "facebook-home";
+  }
   return null;
 }
 
@@ -397,6 +401,7 @@ function redirectToastMessage(reason) {
     "youtube-home": "YouTube home",
     "linkedin-home": "the LinkedIn feed",
     "linkedin-profile": "your LinkedIn profile",
+    "facebook-home": "the Facebook feed",
   };
   return "🧰 Chrome Toolbelt: bounced from " + (labels[reason] || "a distraction") + " to your oldest Reading Material bookmark";
 }
@@ -460,7 +465,7 @@ async function maybeRedirectTab(tabId, rawUrl) {
 
 async function sweepOpenTabsForRedirect() {
   try {
-    const tabs = await chrome.tabs.query({ url: ["*://*.youtube.com/*", "*://*.linkedin.com/*"] });
+    const tabs = await chrome.tabs.query({ url: ["*://*.youtube.com/*", "*://*.linkedin.com/*", "*://*.facebook.com/*"] });
     for (const t of tabs) {
       if (t.id != null && t.url) maybeRedirectTab(t.id, t.url);
     }

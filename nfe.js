@@ -29,6 +29,7 @@
     ],
     facebook: [
       "[role='feed']",
+      "[data-pagelet='MainFeed']",
       "[data-pagelet='Feed']",
       "[data-pagelet^='FeedUnit_']",
     ],

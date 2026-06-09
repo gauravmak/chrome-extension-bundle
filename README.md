@@ -44,3 +44,7 @@ A personal Chrome extension that bundles browser utilities, focus tools, and pag
 6. The 🧰 icon appears in your toolbar — you're done.
 
 > Adding new permissions later? Reload the extension at `chrome://extensions` and reopen the popup so it picks up fresh `chrome` API references.
+
+## Credits
+
+Original idea and initial implementation by [@levelsio](https://x.com/levelsio), released as [SuperLevels](https://github.com/levelsio/superlevels) (MIT). This is a personal fork — extended and customized for my own use, with thanks to the original author for the concept and groundwork.
