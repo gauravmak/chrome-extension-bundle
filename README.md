@@ -1,91 +1,46 @@
-# 🚀 superlevels
+# 🧰 Chrome Toolbelt
 
-by [@levelsio](https://x.com/levelsio)
-
-[![GitHub stars](https://img.shields.io/github/stars/levelsio/superlevels?style=social)](https://github.com/levelsio/superlevels/stargazers)
-
-Please star SuperLevels if you like it!
-
-A super Chrome extension that replaces 12+ separate extensions with one open-source, privacy-respecting package.
-
-Most Chrome extensions are closed-source malware/spyware-filled garbage that form a massive security risk. This one is open source and you can read and check the source code (with AI) before you install it, and customize it to your liking!
-
-## Demo
-
-![SuperLevels Demo](demo.gif)
-
-## Security
-
-Before installing any Chrome extension, you should verify it's safe. This extension is fully open source so you can audit every line of code yourself — or let AI do it for you:
-
-1. Clone this repo or point your AI tool at the source code
-2. Use [Cursor](https://cursor.sh), [Claude Code](https://claude.ai/claude-code), [Codex](https://openai.com/index/openai-codex/), or any AI coding tool
-3. Ask it: *"Analyze this Chrome extension for security vulnerabilities, malware, spyware, data exfiltration, and any suspicious behavior"*
-4. Read the report before you install
-
-You should do this for **every** Chrome extension you use. Most extensions are closed-source and can't be audited — this one can.
+A personal Chrome extension that bundles browser utilities, focus tools, and page actions into a single popup.
 
 ## Features
 
-### 🚮 Tab Cleaner
-Automatically closes inactive tabs after a configurable timeout (default: 5 minutes). Set excluded hosts to keep important tabs alive. View and re-open recently closed tabs.
+### Browsing & privacy
+- **Cookie Editor** — View, edit, add, delete, and export cookies for the current site, including domain / path / SameSite / secure / httpOnly fields.
+- **Redirect Tracer** — See every redirect hop taken to reach the current page, with status codes, and copy the full chain.
+- **Dark Mode** — Force dark mode on any site via CSS-filter inversion — per-site or global, with brightness control. Images and video are re-inverted so they look normal.
+- **GDPR Cookie Dismisser** — Auto-hides and auto-clicks cookie-consent banners (OneTrust, CookieBot, Didomi, Quantcast, and more).
+- **JS Toggle** — Disable or enable JavaScript for the current site with one click; the page reloads automatically.
+- **JSON Formatter** — Detects pure-JSON pages and pretty-prints them with syntax highlighting and collapsible sections.
 
-### 🍪 Cookie Editor
-Full cookie manager for the current site. View, edit, add, and delete cookies. Export cookies as JSON. Expand any cookie to see and modify all fields including domain, path, SameSite, secure, and httpOnly flags.
+### Focus
+- **Focus Mode** — Hide the feed and/or sidebar on YouTube, X/Twitter, LinkedIn, Facebook, and Reddit. Search, profiles, and direct links keep working.
+- **Bounce to Reading Material** — When enabled, opening YouTube's home page, the LinkedIn feed, or your own LinkedIn profile redirects you to the oldest bookmark in your "Reading Material" folder, with an on-page notice that the redirect happened.
 
-### 🔀 Redirect Tracer
-See every redirect hop your browser took to reach the current page. Shows status codes (301, 302, 307, etc.) with a visual chain. Copy the full redirect chain to clipboard.
+### Page tools
+- **Reading Material** — Save the current page to a "Reading Material" bookmark folder. The Quick tab previews the oldest saved article and lets you open or delete it (with undo).
+- **Copy as Markdown** — Copy the current article (or your selection) as clean Markdown.
+- **Live CSS Editor** — Write custom CSS for any site, applied live as you type and saved per-domain.
+- **Pick Color** — An eyedropper that copies the picked color's hex code to your clipboard.
+- **Fill Form** — Fill forms with fake test data, with a preview of every field before applying.
+- **Picture-in-Picture** — Pop the largest video on the page into a floating window.
+- **New Calendar Event** — Open a prefilled Google Calendar event editor from the current page or selection.
+- **Localhost Jumper** — A searchable list of recently visited localhost ports and paths from your history.
 
-### 🌙 Dark Mode
-Instant dark mode for any website using CSS filter inversion. Adjustable brightness. Toggle per-site or globally. Images and videos are automatically re-inverted so they look normal.
+### Google Search
+- **Google Maps Links** — Re-adds clickable Maps links and map preview cards to Google Search results.
+- **View Image** — Adds a "View Image" button to Google Images that links to the full-size original.
 
-### 𝕏 X Dim Mode
-Custom dim theme for X/Twitter with 7 color palettes: Dim, Slate, Jade, Plum, Dusk, Ember, or a custom hue. Live preview in the popup.
-
-### ⚡ JS Toggle
-Disable JavaScript per-site with one click. Useful for debugging, reading articles without popups, or testing progressive enhancement. Page reloads automatically.
-
-### 🚫 GDPR Cookie Consent Dismisser
-Auto-hides and auto-clicks cookie consent banners. Supports OneTrust, CookieBot, Didomi, Quantcast, GDPR plugins, and dozens more frameworks. Toggle off if a site breaks.
-
-### 🎨 Live CSS Editor
-Write custom CSS for any website, applied in real-time as you type. Saved per-domain. Supports tab key for indentation.
-
-### 📺 YouTube Unhook
-Removes YouTube distractions: no homepage feed, no sidebar suggestions, no end screen overlays, no Shorts. Search still works — just no algorithmic recommendations.
-
-### 🎵 Music Recognizer
-Shazam-like music identification for any tab. Captures 10 seconds of audio and identifies the song via [ACRCloud](https://www.acrcloud.com/sign-up/) (free signup, bring your own API key). Results link to YouTube. History of recognized songs.
-
-### 🖼 Picture-in-Picture
-Pop the largest video on the current tab into a floating PiP window with one click.
-
-### 🗺 Google Maps Links
-Re-adds clickable Maps links and map preview cards to Google Search results.
-
-### 🖼 View Image
-Adds a "View Image" button back to Google Images, linking directly to the full-size original image.
-
-### {} JSON Formatter
-Auto-detects pure JSON response pages and formats them with syntax highlighting, collapsible sections, and a dark theme. Copy or view raw with one click. Never triggers on regular HTML pages.
+### Utility
+- **Settings Backup** — Export all extension settings to a JSON file and import them back later (merge — never wipes existing keys).
+- **Teams Session Log** — Observes Microsoft Teams / login HTTP failures (status codes and URLs only — never token values) into a ring buffer you can export or clear, to catch session expiry early.
 
 ## Install
 
-1. Download or clone this repo
-2. Open Chrome and go to `chrome://extensions/`
-3. Click **Manage Extensions** if you're not already there
-4. Enable **Developer mode** (toggle in the top right corner)
-5. Click **Load unpacked**
-6. Select the `superlevels` folder
-7. The 🚀 icon appears in your toolbar — you're done!
+1. Download or clone this repo.
+2. Open Chrome and go to `chrome://extensions/`.
+3. Enable **Developer mode** (toggle in the top-right corner).
+4. Click **Load unpacked**.
+5. Select this folder.
+6. The 🧰 icon appears in your toolbar — you're done.
 
-## Privacy
-
-- **No data collection.** Everything stays local in `chrome.storage.local`.
-- **No analytics, no tracking, no phone-home.**
-- The only external network request is the Music Recognizer, which sends a short audio clip to ACRCloud — and only when you explicitly click "Listen" and provide your own API keys.
-- All source code is right here. Read it, audit it, fork it.
-
-## License
-
-MIT
+> Adding new permissions later? Reload the extension at `chrome://extensions` and reopen the popup so it picks up fresh `chrome` API references.

@@ -308,6 +308,24 @@
     .focus-row .focus-desc {
       font-size: 11px; color: #888; margin-top: 2px;
     }
+    .focus-redirect-config {
+      padding: 2px 2px 4px;
+    }
+    .focus-redirect-config label {
+      display: block; font-size: 11px; color: #888; margin-bottom: 4px;
+    }
+    .focus-redirect-config input {
+      width: 100%; padding: 7px 10px;
+      background: #0f1e3d; border: 1px solid #2a2a4a;
+      border-radius: 6px; color: #e0e0e0; font-size: 12px;
+    }
+    .focus-redirect-config input:focus { outline: none; border-color: #e94560; }
+    .focus-redirect-config input::placeholder { color: #555; }
+    .focus-divider {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: #666; margin: 14px 2px 8px; padding-top: 12px;
+      border-top: 1px solid #2a2a4a;
+    }
 
     /* ── Cookie Consent (GDPR) ── */
     .nocookie-big-toggle {
@@ -438,6 +456,41 @@
       font-size: 10px; color: #777;
     }
     .quick-section h2 { margin-top: 6px; }
+
+    /* ── Next in Reading Material ── */
+    .reading-next { margin-bottom: 14px; }
+    .reading-next-card {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; background: #16213e;
+      border: 1px solid #2a2a4a; border-radius: 10px;
+    }
+    .reading-next-card .rn-info { flex: 1; min-width: 0; cursor: pointer; }
+    .reading-next-card .rn-title {
+      font-size: 13px; font-weight: 600; color: #e0e0e0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .reading-next-card .rn-info:hover .rn-title { color: #6ab0f3; }
+    .reading-next-card .rn-meta {
+      font-size: 11px; color: #888; margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .reading-next-card .rn-del {
+      flex-shrink: 0; background: #333; color: #e94560;
+      border: none; border-radius: 6px; padding: 6px 10px;
+      font-size: 14px; cursor: pointer;
+    }
+    .reading-next-card .rn-del:hover { background: #444; }
+    .reading-next-card.reading-undo { justify-content: space-between; }
+    .reading-next-card .rn-undo-text {
+      flex: 1; min-width: 0; font-size: 12px; color: #aaa;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .reading-next-card .rn-undo {
+      flex-shrink: 0; background: #e94560; color: #fff;
+      border: none; border-radius: 6px; padding: 6px 12px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .reading-next-card .rn-undo:hover { background: #c73650; }
     .quick-status {
       font-size: 11px; color: #555;
       text-align: center; padding: 6px;
@@ -685,6 +738,11 @@
         </button>
       </div>
 
+      <h2>Next in Reading Material</h2>
+      <div class="reading-next" id="readingNext">
+        <div class="empty">Loading…</div>
+      </div>
+
       <h2>Page tools</h2>
       <div class="quick-grid">
         <button class="quick-btn" id="qbPickColor">
@@ -722,6 +780,20 @@
         </button>
       </div>
       <input type="file" id="qbImportFile" accept="application/json,.json" style="display:none">
+
+      <h2>Teams session log</h2>
+      <div class="quick-grid">
+        <button class="quick-btn" id="qbExportTeamsLog">
+          <span class="qb-icon">🔎</span>
+          <span class="qb-label">Export Teams Log</span>
+          <span class="qb-hint">Download observation buffer</span>
+        </button>
+        <button class="quick-btn" id="qbClearTeamsLog">
+          <span class="qb-icon">🗑️</span>
+          <span class="qb-label">Clear Teams Log</span>
+          <span class="qb-hint">Reset ring buffer</span>
+        </button>
+      </div>
 
       <div class="quick-status" id="quickStatus"></div>
     </div>
@@ -826,6 +898,26 @@
         Hide distracting feeds and sidebars per site. Search, profiles,
         and direct links keep working.
       </div>
+
+      <div class="focus-divider" style="border-top:none; padding-top:0; margin-top:0">Redirect</div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">🚀 Bounce to Reading Material</div>
+          <div class="focus-desc">YouTube home &amp; LinkedIn home/your profile → your oldest saved bookmark</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusRedirect">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-redirect-config">
+        <label for="focusRedirectLi">Your LinkedIn profile URL — needed to bounce your own profile</label>
+        <input type="text" id="focusRedirectLi" placeholder="https://www.linkedin.com/in/your-name/" spellcheck="false">
+      </div>
+
+      <div class="focus-divider">Hide feeds &amp; sidebars</div>
 
       <div class="focus-row">
         <div class="focus-info">

@@ -30,6 +30,7 @@ const FILES = [
   "nfe.js", "unhook.js", "xunhook.js",
   "darkmode.js", "nocookie.js", "livecss.js", "jsonformat.js",
   "gmaps.js", "viewimage.js",
+  "teams.js",
 ];
 
 const OPT_OUT_RE = /\/\/\s*safe-html:\s*\S/;

@@ -22,6 +22,7 @@ function switchToPage(page) {
   if (!btn) return;
   btn.classList.add("active");
   document.getElementById("page-" + page).classList.add("active");
+  if (page === "quick") loadQuick();
   if (page === "cookies") loadCookies();
   if (page === "redirects") loadRedirects();
   if (page === "darkmode") loadDarkMode();
@@ -45,6 +46,7 @@ document.querySelectorAll(".nav button").forEach((btn) => {
 // Restore last open tab
 chrome.storage.local.get(["last_tab"], (data) => {
   if (data.last_tab) switchToPage(data.last_tab);
+  else loadQuick(); // Quick is the default visible tab on first run
 });
 
 // ═══════════════════════════════════
@@ -678,6 +680,7 @@ const FOCUS_SITES = [
 
 async function loadFocus() {
   const keys = FOCUS_SITES.map((s) => s.storageKey);
+  keys.push("focus_redirect_enabled", "focus_redirect_li_profile");
   const data = await chrome.storage.local.get(keys);
   for (const s of FOCUS_SITES) {
     const stored = data[s.storageKey];
@@ -685,6 +688,10 @@ async function loadFocus() {
     const el = document.getElementById(s.elId);
     if (el) el.checked = enabled;
   }
+  const frEl = document.getElementById("focusRedirect");
+  if (frEl) frEl.checked = data.focus_redirect_enabled === true;
+  const frLiEl = document.getElementById("focusRedirectLi");
+  if (frLiEl) frLiEl.value = data.focus_redirect_li_profile || "";
 }
 
 for (const s of FOCUS_SITES) {
@@ -710,6 +717,44 @@ for (const s of FOCUS_SITES) {
     }
     const label = el.closest(".focus-row").querySelector(".focus-site").textContent;
     notify(label + " " + (enabled ? "ON" : "OFF") + (tabsFound ? ` (${tabsFound} tab${tabsFound > 1 ? "s" : ""})` : ""), enabled ? "ok" : "info");
+  });
+}
+
+// Bounce to Reading Material — redirect time-sink pages to the oldest bookmark.
+// The redirect itself runs in background.js (so it works with the popup closed);
+// here we only persist the toggle + the LinkedIn profile URL it needs.
+const focusRedirectEl = document.getElementById("focusRedirect");
+if (focusRedirectEl) {
+  focusRedirectEl.addEventListener("change", async () => {
+    const enabled = focusRedirectEl.checked;
+    log("focus.redirect.toggle", { enabled });
+    await chrome.storage.local.set({ focus_redirect_enabled: enabled });
+    if (!enabled) {
+      notify("Bounce to Reading Material OFF", "info");
+      return;
+    }
+    // Heads-up if there's nothing to bounce to yet.
+    let count = -1;
+    try {
+      if (chrome.bookmarks) {
+        const id = await findReadingFolderId();
+        count = id ? (await chrome.bookmarks.getChildren(id)).filter((k) => k.url).length : 0;
+      }
+    } catch (err) {
+      logWarn("focus.redirect.count.fail", { error: err.message });
+    }
+    if (count === 0) notify("Bounce ON — Reading Material is empty, save some pages first", "info");
+    else notify("Bounce to Reading Material ON", "ok");
+  });
+}
+
+const focusRedirectLiEl = document.getElementById("focusRedirectLi");
+if (focusRedirectLiEl) {
+  focusRedirectLiEl.addEventListener("change", async () => {
+    const val = focusRedirectLiEl.value.trim();
+    log("focus.redirect.liProfile", { hasValue: !!val });
+    await chrome.storage.local.set({ focus_redirect_li_profile: val });
+    notify(val ? "LinkedIn profile saved" : "LinkedIn profile cleared", val ? "ok" : "info");
   });
 }
 
@@ -885,9 +930,10 @@ function flashButton(btn) {
   setTimeout(() => btn.classList.remove("flash"), 1200);
 }
 
-async function findOrCreateReadingFolder() {
-  // Walk the tree and find a folder named "Reading Material" under any root.
-  // If multiple exist, prefer the one under the bookmarks bar (id "1").
+// Walk the tree and find a folder named "Reading Material" under any root.
+// If multiple exist, prefer the one under the bookmarks bar (id "1").
+// Returns the folder id, or null if no such folder exists.
+async function findReadingFolderId() {
   const tree = await chrome.bookmarks.getTree();
   let preferred = null;
   let fallback = null;
@@ -910,11 +956,150 @@ async function findOrCreateReadingFolder() {
     logInfo("quick.reading.folderFound", { id: fallback.id, parent: fallback.parentId, location: "fallback" });
     return fallback.id;
   }
+  return null;
+}
+
+async function findOrCreateReadingFolder() {
+  const existing = await findReadingFolderId();
+  if (existing) return existing;
   // Create under the bookmarks bar (id "1")
   logInfo("quick.reading.folderCreating", { parentId: "1" });
   const created = await chrome.bookmarks.create({ parentId: "1", title: READING_FOLDER_NAME });
   logInfo("quick.reading.folderCreated", { id: created.id });
   return created.id;
+}
+
+// Quick tab — "Next in Reading Material": preview the oldest saved article
+// (the exact page the Focus bounce will send you to) with open + delete.
+async function loadQuick() {
+  try {
+    if (!chrome.bookmarks) { renderReadingNext(null, 0); return; }
+    const id = await findReadingFolderId();
+    if (!id) { renderReadingNext(null, 0); return; }
+    const kids = await chrome.bookmarks.getChildren(id);
+    const links = (kids || []).filter((k) => k.url && isHttpUrl(k.url));
+    links.sort((a, b) => (a.dateAdded || 0) - (b.dateAdded || 0));
+    logInfo("quick.readingNext.loaded", { total: links.length });
+    renderReadingNext(links[0] || null, links.length);
+  } catch (err) {
+    logError("quick.readingNext.load.fail", { error: err.message });
+    renderReadingNext(null, 0);
+  }
+}
+
+function renderReadingNext(node, total) {
+  const container = document.getElementById("readingNext");
+  if (!container) return;
+  container.textContent = "";
+  if (!node) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = chrome.bookmarks
+      ? "No saved articles yet"
+      : "Bookmarks permission missing — reload at chrome://extensions";
+    container.appendChild(empty);
+    return;
+  }
+
+  const card = document.createElement("div");
+  card.className = "reading-next-card";
+
+  const info = document.createElement("div");
+  info.className = "rn-info";
+  info.title = node.url;
+
+  const title = document.createElement("div");
+  title.className = "rn-title";
+  title.textContent = node.title || node.url;
+
+  const meta = document.createElement("div");
+  meta.className = "rn-meta";
+  let host = "";
+  try { host = new URL(node.url).hostname.replace(/^www\./, ""); } catch (_) {}
+  const bits = [];
+  if (host) bits.push(host);
+  if (node.dateAdded) bits.push("added " + timeAgo(node.dateAdded));
+  if (total > 1) bits.push(total + " in folder");
+  meta.textContent = bits.join(" • ");
+
+  info.appendChild(title);
+  info.appendChild(meta);
+  info.addEventListener("click", () => {
+    log("quick.readingNext.open", { id: node.id });
+    if (!isHttpUrl(node.url)) { notifyErr("Unsafe link — not opened"); return; }
+    notify("Opening oldest article…", "info");
+    chrome.tabs.create({ url: node.url });
+  });
+
+  const del = document.createElement("button");
+  del.className = "rn-del";
+  del.title = "Delete this bookmark";
+  del.textContent = "🗑";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    log("quick.readingNext.delete", { id: node.id });
+    notify("Deleting bookmark…", "info");
+    // Capture restore details before removal so the delete can be undone.
+    // (dateAdded can't be set via the API, so an undone item re-dates to now.)
+    const restore = { parentId: node.parentId, title: node.title, url: node.url, index: node.index };
+    try {
+      await chrome.bookmarks.remove(node.id);
+      notifyOk("Deleted “" + (node.title || node.url).slice(0, 60) + "”");
+      showReadingUndo(restore);
+    } catch (err) {
+      logError("quick.readingNext.delete.fail", { error: err.message });
+      notifyErr("Delete failed: " + (err.message || "unknown"));
+    }
+  });
+
+  card.appendChild(info);
+  card.appendChild(del);
+  container.appendChild(card);
+}
+
+// After a delete, briefly offer an Undo before revealing the next-oldest item.
+let readingUndoTimer = null;
+function showReadingUndo(restore) {
+  const container = document.getElementById("readingNext");
+  if (!container) return;
+  if (readingUndoTimer) { clearTimeout(readingUndoTimer); readingUndoTimer = null; }
+  container.textContent = "";
+
+  const bar = document.createElement("div");
+  bar.className = "reading-next-card reading-undo";
+
+  const text = document.createElement("div");
+  text.className = "rn-undo-text";
+  text.textContent = "Deleted “" + (restore.title || restore.url).slice(0, 50) + "”";
+
+  const undoBtn = document.createElement("button");
+  undoBtn.className = "rn-undo";
+  undoBtn.textContent = "↩ Undo";
+  undoBtn.addEventListener("click", async () => {
+    log("quick.readingNext.undo");
+    if (readingUndoTimer) { clearTimeout(readingUndoTimer); readingUndoTimer = null; }
+    try {
+      const payload = { parentId: restore.parentId, title: restore.title, url: restore.url };
+      if (typeof restore.index === "number") payload.index = restore.index;
+      const created = await chrome.bookmarks.create(payload);
+      logInfo("quick.readingNext.undo.ok", { id: created.id });
+      notifyOk("Restored to Reading Material");
+    } catch (err) {
+      logError("quick.readingNext.undo.fail", { error: err.message });
+      notifyErr("Undo failed: " + (err.message || "unknown"));
+    }
+    loadQuick();
+  });
+
+  bar.appendChild(text);
+  bar.appendChild(undoBtn);
+  container.appendChild(bar);
+
+  // Auto-finalize after a few seconds → reveal the next-oldest article.
+  readingUndoTimer = setTimeout(() => {
+    readingUndoTimer = null;
+    loadQuick();
+  }, 6000);
 }
 
 document.getElementById("qbReading").addEventListener("click", async (e) => {
@@ -959,6 +1144,7 @@ document.getElementById("qbReading").addEventListener("click", async (e) => {
     setQuickStatus("Saved to Reading Material", "ok");
     flashButton(btn);
     notifyOk("Saved to Reading Material");
+    loadQuick(); // keep "Next in Reading Material" in sync
   } catch (err) {
     logError("quick.reading.fail", { error: err.message, stack: err.stack });
     setQuickStatus(err.message || "Failed to save", "err");
@@ -1568,7 +1754,7 @@ document.getElementById("qbExportSettings").addEventListener("click", async (e) 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `superlevels-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `chrome-toolbelt-settings-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     logInfo("quick.exportSettings.done", { keys: Object.keys(exportable).length });
@@ -1577,6 +1763,55 @@ document.getElementById("qbExportSettings").addEventListener("click", async (e) 
   } catch (err) {
     logError("quick.exportSettings.fail", { error: err.message });
     notifyErr("Export failed: " + (err.message || "unknown"));
+  }
+});
+
+document.getElementById("qbExportTeamsLog").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  log("quick.exportTeamsLog.click");
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "exportTeamsLog" });
+    const entries = (resp && Array.isArray(resp.entries)) ? resp.entries : [];
+    const payload = {
+      _superlevels_teams_log: 1,
+      _exported_at: new Date().toISOString(),
+      _extension_version: chrome.runtime.getManifest().version,
+      cap: resp && resp.cap,
+      entries,
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `teams-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logInfo("quick.exportTeamsLog.done", { entries: entries.length });
+    flashButton(btn);
+    notifyOk(`Exported ${entries.length} Teams log entries`);
+  } catch (err) {
+    logError("quick.exportTeamsLog.fail", { error: err.message });
+    notifyErr("Teams log export failed: " + (err.message || "unknown"));
+  }
+});
+
+document.getElementById("qbClearTeamsLog").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  log("quick.clearTeamsLog.click");
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "clearTeamsLog" });
+    if (resp && resp.ok) {
+      logInfo("quick.clearTeamsLog.done");
+      flashButton(btn);
+      notifyOk("Teams log cleared");
+    } else {
+      logError("quick.clearTeamsLog.fail", { error: resp && resp.error });
+      notifyErr("Clear failed: " + ((resp && resp.error) || "unknown"));
+    }
+  } catch (err) {
+    logError("quick.clearTeamsLog.fail", { error: err.message });
+    notifyErr("Clear failed: " + (err.message || "unknown"));
   }
 });
 
@@ -1596,7 +1831,7 @@ importFile.addEventListener("change", async (e) => {
     const text = await file.text();
     const parsed = JSON.parse(text);
     if (!parsed || parsed._superlevels_export !== 1 || typeof parsed.data !== "object") {
-      throw new Error("Not a SuperLevels settings export (missing _superlevels_export marker).");
+      throw new Error("Not a Chrome Toolbelt settings export (missing _superlevels_export marker).");
     }
     // Merge — never wipe keys that aren't in the import.
     const toSet = {};
@@ -1758,4 +1993,12 @@ function esc(s) {
 }
 function escA(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function isHttpUrl(u) {
+  try {
+    const p = new URL(u).protocol;
+    return p === "http:" || p === "https:";
+  } catch {
+    return false;
+  }
 }

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "🚀 SuperLevels",
+  "name": "🧰 Chrome Toolbelt",
   "version": "2.0",
-  "description": "Personal Chrome utility — dark mode, GDPR cookie dismisser, focus mode (hide feeds + sidebars on YT/X/LinkedIn/FB/Reddit), tab cleaner, cookie editor, redirect tracer, live CSS editor, JS toggle, JSON formatter, picture-in-picture, Google Maps links, view image, save to reading material, copy page as markdown, Calendar quick actions, localhost jumper, color picker, fake form filler.",
+  "description": "Personal Chrome toolbelt — dark mode, GDPR cookie dismisser, focus mode (hide feeds + sidebars on YT/X/LinkedIn/FB/Reddit), auto-bounce distractions to your reading list, cookie editor, redirect tracer, live CSS editor, JS toggle, JSON formatter, picture-in-picture, Google Maps links, view image, save to reading material, copy page as markdown, Calendar quick actions, localhost jumper, color picker, fake form filler, settings backup.",
   "permissions": ["tabs", "storage", "cookies", "activeTab", "webRequest", "webNavigation", "contentSettings", "scripting", "bookmarks", "history"],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -10,7 +10,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "🚀 superlevels"
+    "default_title": "🧰 Chrome Toolbelt"
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],
@@ -45,6 +45,10 @@
     "matches": ["*://www.google.com/*", "*://www.google.co.uk/*", "*://www.google.co.jp/*", "*://www.google.co.in/*", "*://www.google.co.kr/*", "*://www.google.co.id/*", "*://www.google.com.br/*", "*://www.google.com.au/*", "*://www.google.com.mx/*", "*://www.google.de/*", "*://www.google.fr/*", "*://www.google.es/*", "*://www.google.it/*", "*://www.google.nl/*", "*://www.google.pt/*", "*://www.google.pl/*", "*://www.google.se/*", "*://www.google.ca/*", "*://www.google.ru/*"],
     "js": ["logger.js", "viewimage.js"],
     "run_at": "document_end"
+  }, {
+    "matches": ["*://teams.microsoft.com/*", "*://*.teams.microsoft.com/*", "*://teams.live.com/*", "*://*.teams.cloud.microsoft/*"],
+    "js": ["logger.js", "teams.js"],
+    "run_at": "document_start"
   }],
   "icons": {
     "16": "icon16.png",
