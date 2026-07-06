@@ -145,23 +145,71 @@ function bgTeamsReport(level, action, data) {
   });
 }
 
+// Sliding-window 401 burst detector per tab. A single 401 from a Teams
+// API endpoint is NOT enough to trigger our dialog: even logged-in
+// sessions hit occasional 401s on stale signed-URL thumbnails and similar.
+// But session expiry produces a *burst* — Teams retries multiple endpoints
+// and they all fail in rapid succession. We require >= TEAMS_401_BURST
+// failures inside TEAMS_401_BURST_WINDOW_MS to fire.
+//
+// A 401 only signals a dead session when it's a CORE, token-gated API call.
+// Media / link-preview / real-time-signaling endpoints 401 on stale signed
+// URLs with a perfectly valid session: the logs show asyncgw urlp/objects
+// (link-preview thumbnails, chat media) 401ing in bursts while signed in, and
+// still 401ing AFTER a successful re-login. Those media 401s were the sole
+// trigger of the only false "session dead" prompt we ever fired — never count
+// them. The host filter alone is not enough: asyncgw.teams.microsoft.com
+// matches /teams\.microsoft\.com/.
+const TEAMS_401_NONSESSION_RE = /\.asyncgw\.|\/urlp\/|\/objects\/|\.trouter\./i;
+// 2 was too trigger-happy — two coincidental 401s in 30s fired the prompt.
+const TEAMS_401_BURST = 3;
+const TEAMS_401_BURST_WINDOW_MS = 30_000;
+const TEAMS_401_FIRE_COOLDOWN_MS = 60_000;
+const teams401Timestamps = new Map();  // tabId → number[] (ms epoch)
+const teams401LastFiredAt = new Map(); // tabId → ms epoch
+
 chrome.webRequest.onCompleted.addListener(
   (d) => {
     if (d.statusCode < 400) return;
-    bgTeamsReport("warn", "teams.http.fail", {
+    // For 401s, decide up front whether this is a session-gated call so the
+    // log records WHY a 401 did or didn't count toward a burst — that makes a
+    // later "check the log file" pass self-explanatory instead of guesswork.
+    const is401 = d.statusCode === 401;
+    const sessionRelevant = is401
+      && /teams\.microsoft\.com|teams\.cloud\.microsoft/.test(d.url)
+      && !TEAMS_401_NONSESSION_RE.test(d.url);
+    bgTeamsReport("info", "teams.http.fail", {
       status: d.statusCode,
       method: d.method,
       type: d.type,
       url: d.url.slice(0, 220),
       tabId: d.tabId,
+      ...(is401 ? { sessionRelevant } : {}),
     });
+    if (!is401) return;
+    if (d.tabId < 0) return;
+    if (!sessionRelevant) return;
+
+    const now = Date.now();
+    const arr = teams401Timestamps.get(d.tabId) || [];
+    const fresh = arr.filter((ts) => now - ts < TEAMS_401_BURST_WINDOW_MS);
+    fresh.push(now);
+    teams401Timestamps.set(d.tabId, fresh);
+
+    if (fresh.length < TEAMS_401_BURST) return;
+    const lastFired = teams401LastFiredAt.get(d.tabId) || 0;
+    if (now - lastFired < TEAMS_401_FIRE_COOLDOWN_MS) return;
+    teams401LastFiredAt.set(d.tabId, now);
+
+    bgTeamsReport("info", "teams.401.burst", { tabId: d.tabId, count: fresh.length, windowMs: TEAMS_401_BURST_WINDOW_MS });
+    chrome.tabs.sendMessage(d.tabId, { type: "teamsSessionLikelyDead", count: fresh.length }).catch(() => { /* no listener */ });
   },
   { urls: TEAMS_HOSTS }
 );
 
 chrome.webRequest.onErrorOccurred.addListener(
   (d) => {
-    bgTeamsReport("warn", "teams.http.err", {
+    bgTeamsReport("info", "teams.http.err", {
       error: d.error,
       method: d.method,
       type: d.type,
@@ -184,14 +232,14 @@ chrome.webNavigation.onBeforeNavigate.addListener((d) => {
   const url = d.url || "";
   if (LOGIN_HOST_RE.test(url)) {
     const prev = lastMainFrameUrlByTab.get(d.tabId) || null;
-    bgTeamsReport("warn", "teams.nav.to.login", {
+    bgTeamsReport("info", "teams.nav.to.login", {
       tabId: d.tabId, url: url.slice(0, 220),
       fromUrl: prev ? prev.slice(0, 220) : null,
     });
   } else if (TEAMS_HOST_RE.test(url)) {
     const prev = lastMainFrameUrlByTab.get(d.tabId) || "";
     if (LOGIN_HOST_RE.test(prev)) {
-      bgTeamsReport("warn", "teams.nav.from.login", {
+      bgTeamsReport("info", "teams.nav.from.login", {
         tabId: d.tabId, url: url.slice(0, 220), fromUrl: prev.slice(0, 220),
       });
     }
@@ -205,6 +253,8 @@ chrome.webNavigation.onBeforeNavigate.addListener((d) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastMainFrameUrlByTab.delete(tabId);
+  teams401Timestamps.delete(tabId);
+  teams401LastFiredAt.delete(tabId);
 });
 
 // Respond to popup requests
@@ -299,11 +349,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //  Focus → Bounce to Reading Material
 //
 //  When enabled in the popup's Focus tab, navigating to a known time-sink
-//  page is redirected to the OLDEST bookmark in the "Reading Material" folder:
+//  page is redirected to the LATEST bookmark in the "Reading Material" folder:
 //    • YouTube home                    (youtube.com/)
 //    • LinkedIn home / feed            (linkedin.com/ , /feed)
 //    • the user's own LinkedIn profile (/in/<slug>, slug configured in popup)
 //    • Facebook home / feed            (facebook.com/ , /home.php)
+//    • Instagram home / feed           (instagram.com/)
 //
 //  Lives in the background so it fires with the popup closed. Bookmark URLs
 //  are page-originated and therefore UNTRUSTED — we only ever navigate to an
@@ -365,6 +416,9 @@ function focusRedirectReason(rawUrl) {
   if (/(^|\.)facebook\.com$/.test(host)) {
     if (path === "/" || path === "/home.php" || path === "/home.php/") return "facebook-home";
   }
+  if (/(^|\.)instagram\.com$/.test(host)) {
+    if (path === "/") return "instagram-home";
+  }
   return null;
 }
 
@@ -386,13 +440,13 @@ async function findReadingFolderId() {
   return (preferred || fallback || {}).id || null;
 }
 
-async function getOldestReadingUrl() {
+async function getLatestReadingUrl() {
   const folderId = await findReadingFolderId();
   if (!folderId) return null;
   const kids = await chrome.bookmarks.getChildren(folderId);
   const links = (kids || []).filter((k) => k.url && isHttpUrl(k.url));
   if (!links.length) return null;
-  links.sort((a, b) => (a.dateAdded || 0) - (b.dateAdded || 0));
+  links.sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
   return links[0].url;
 }
 
@@ -402,8 +456,9 @@ function redirectToastMessage(reason) {
     "linkedin-home": "the LinkedIn feed",
     "linkedin-profile": "your LinkedIn profile",
     "facebook-home": "the Facebook feed",
+    "instagram-home": "the Instagram feed",
   };
-  return "🧰 Chrome Toolbelt: bounced from " + (labels[reason] || "a distraction") + " to your oldest Reading Material bookmark";
+  return "🧰 Chrome Toolbelt: bounced from " + (labels[reason] || "a distraction") + " to your latest Reading Material bookmark";
 }
 
 // Injected into the destination page (isolated world) to show a self-dismissing
@@ -437,7 +492,7 @@ async function maybeRedirectTab(tabId, rawUrl) {
   if (!reason) return;
   let target;
   try {
-    target = await getOldestReadingUrl();
+    target = await getLatestReadingUrl();
   } catch (err) {
     SL.log.warn("bg", "focusRedirect.lookup.fail", { error: err.message });
     return;
@@ -465,7 +520,7 @@ async function maybeRedirectTab(tabId, rawUrl) {
 
 async function sweepOpenTabsForRedirect() {
   try {
-    const tabs = await chrome.tabs.query({ url: ["*://*.youtube.com/*", "*://*.linkedin.com/*", "*://*.facebook.com/*"] });
+    const tabs = await chrome.tabs.query({ url: ["*://*.youtube.com/*", "*://*.linkedin.com/*", "*://*.facebook.com/*", "*://*.instagram.com/*"] });
     for (const t of tabs) {
       if (t.id != null && t.url) maybeRedirectTab(t.id, t.url);
     }

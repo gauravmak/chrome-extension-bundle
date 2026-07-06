@@ -625,6 +625,7 @@ livecssClear.addEventListener("click", async () => {
 //   nfe_x                (default OFF)  → X home timeline nfe.js
 //   nfe_linkedin         (default OFF)  → LinkedIn feed nfe.js
 //   nfe_facebook         (default OFF)  → Facebook feed nfe.js
+//   nfe_instagram        (default OFF)  → Instagram feed nfe.js
 //   nfe_reddit           (default OFF)  → Reddit feed nfe.js
 
 const FOCUS_SITES = [
@@ -667,6 +668,14 @@ const FOCUS_SITES = [
     msgType: "nfe_toggle",
     nfeSite: "facebook",
     urlPatterns: ["*://*.facebook.com/*"],
+  },
+  {
+    elId: "focusInstagram",
+    storageKey: "nfe_instagram",
+    defaultOn: false,
+    msgType: "nfe_toggle",
+    nfeSite: "instagram",
+    urlPatterns: ["*://*.instagram.com/*"],
   },
   {
     elId: "focusReddit",
@@ -720,7 +729,7 @@ for (const s of FOCUS_SITES) {
   });
 }
 
-// Bounce to Reading Material — redirect time-sink pages to the oldest bookmark.
+// Bounce to Reading Material — redirect time-sink pages to the latest bookmark.
 // The redirect itself runs in background.js (so it works with the popup closed);
 // here we only persist the toggle + the LinkedIn profile URL it needs.
 const focusRedirectEl = document.getElementById("focusRedirect");
@@ -969,7 +978,7 @@ async function findOrCreateReadingFolder() {
   return created.id;
 }
 
-// Quick tab — "Next in Reading Material": preview the oldest saved article
+// Quick tab — "Next in Reading Material": preview the latest saved article
 // (the exact page the Focus bounce will send you to) with open + delete.
 async function loadQuick() {
   try {
@@ -978,7 +987,7 @@ async function loadQuick() {
     if (!id) { renderReadingNext(null, 0); return; }
     const kids = await chrome.bookmarks.getChildren(id);
     const links = (kids || []).filter((k) => k.url && isHttpUrl(k.url));
-    links.sort((a, b) => (a.dateAdded || 0) - (b.dateAdded || 0));
+    links.sort((a, b) => (b.dateAdded || 0) - (a.dateAdded || 0));
     logInfo("quick.readingNext.loaded", { total: links.length });
     renderReadingNext(links[0] || null, links.length);
   } catch (err) {
@@ -1027,7 +1036,7 @@ function renderReadingNext(node, total) {
   info.addEventListener("click", () => {
     log("quick.readingNext.open", { id: node.id });
     if (!isHttpUrl(node.url)) { notifyErr("Unsafe link — not opened"); return; }
-    notify("Opening oldest article…", "info");
+    notify("Opening latest article…", "info");
     chrome.tabs.create({ url: node.url });
   });
 
@@ -1057,7 +1066,7 @@ function renderReadingNext(node, total) {
   container.appendChild(card);
 }
 
-// After a delete, briefly offer an Undo before revealing the next-oldest item.
+// After a delete, briefly offer an Undo before revealing the next item.
 let readingUndoTimer = null;
 function showReadingUndo(restore) {
   const container = document.getElementById("readingNext");
@@ -1095,7 +1104,7 @@ function showReadingUndo(restore) {
   bar.appendChild(undoBtn);
   container.appendChild(bar);
 
-  // Auto-finalize after a few seconds → reveal the next-oldest article.
+  // Auto-finalize after a few seconds → reveal the next article.
   readingUndoTimer = setTimeout(() => {
     readingUndoTimer = null;
     loadQuick();

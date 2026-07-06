@@ -33,6 +33,7 @@
       "*://*.linkedin.com/*",
       "*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*",
       "*://*.facebook.com/*",
+      "*://*.instagram.com/*",
       "*://*.reddit.com/*"
     ],
     "js": ["logger.js", "nfe.js"],
