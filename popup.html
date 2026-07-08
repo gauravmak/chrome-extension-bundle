@@ -899,15 +899,30 @@
         and direct links keep working.
       </div>
 
-      <div class="focus-divider" style="border-top:none; padding-top:0; margin-top:0">Redirect</div>
+      <div class="focus-divider" style="border-top:none; padding-top:0; margin-top:0">🚀 Bounce to Reading Material</div>
+
+      <div class="focus-intro" style="margin-bottom:10px">
+        Redirect each site's home feed to your latest saved bookmark. Flip on only the ones that pull you in.
+      </div>
 
       <div class="focus-row">
         <div class="focus-info">
-          <div class="focus-site">🚀 Bounce to Reading Material</div>
-          <div class="focus-desc">YouTube · LinkedIn · Facebook · Instagram home (and your LinkedIn profile) → your latest saved bookmark</div>
+          <div class="focus-site">📺 YouTube</div>
+          <div class="focus-desc">YouTube home → your latest saved bookmark</div>
         </div>
         <label class="switch">
-          <input type="checkbox" id="focusRedirect">
+          <input type="checkbox" id="focusRedirectYoutube">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">💼 LinkedIn</div>
+          <div class="focus-desc">LinkedIn feed &amp; your own profile → your latest saved bookmark</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusRedirectLinkedin">
           <span class="slider"></span>
         </label>
       </div>
@@ -915,6 +930,28 @@
       <div class="focus-redirect-config">
         <label for="focusRedirectLi">Your LinkedIn profile URL — needed to bounce your own profile</label>
         <input type="text" id="focusRedirectLi" placeholder="https://www.linkedin.com/in/your-name/" spellcheck="false">
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">👥 Facebook</div>
+          <div class="focus-desc">Facebook home / feed → your latest saved bookmark</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusRedirectFacebook">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="focus-row">
+        <div class="focus-info">
+          <div class="focus-site">📸 Instagram</div>
+          <div class="focus-desc">Instagram home → your latest saved bookmark</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="focusRedirectInstagram">
+          <span class="slider"></span>
+        </label>
       </div>
 
       <div class="focus-divider">Hide feeds &amp; sidebars</div>

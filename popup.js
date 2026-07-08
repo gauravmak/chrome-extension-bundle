@@ -687,9 +687,19 @@ const FOCUS_SITES = [
   },
 ];
 
+// Bounce to Reading Material — one toggle per social platform (was a single
+// global toggle). The redirect itself runs in background.js so it works with
+// the popup closed; here we only persist each platform's flag. All default OFF.
+const FOCUS_REDIRECT_SITES = [
+  { elId: "focusRedirectYoutube", storageKey: "focus_redirect_youtube", label: "YouTube" },
+  { elId: "focusRedirectLinkedin", storageKey: "focus_redirect_linkedin", label: "LinkedIn" },
+  { elId: "focusRedirectFacebook", storageKey: "focus_redirect_facebook", label: "Facebook" },
+  { elId: "focusRedirectInstagram", storageKey: "focus_redirect_instagram", label: "Instagram" },
+];
+
 async function loadFocus() {
   const keys = FOCUS_SITES.map((s) => s.storageKey);
-  keys.push("focus_redirect_enabled", "focus_redirect_li_profile");
+  keys.push(...FOCUS_REDIRECT_SITES.map((s) => s.storageKey), "focus_redirect_li_profile");
   const data = await chrome.storage.local.get(keys);
   for (const s of FOCUS_SITES) {
     const stored = data[s.storageKey];
@@ -697,8 +707,10 @@ async function loadFocus() {
     const el = document.getElementById(s.elId);
     if (el) el.checked = enabled;
   }
-  const frEl = document.getElementById("focusRedirect");
-  if (frEl) frEl.checked = data.focus_redirect_enabled === true;
+  for (const s of FOCUS_REDIRECT_SITES) {
+    const el = document.getElementById(s.elId);
+    if (el) el.checked = data[s.storageKey] === true; // bounce defaults OFF
+  }
   const frLiEl = document.getElementById("focusRedirectLi");
   if (frLiEl) frLiEl.value = data.focus_redirect_li_profile || "";
 }
@@ -729,31 +741,39 @@ for (const s of FOCUS_SITES) {
   });
 }
 
-// Bounce to Reading Material — redirect time-sink pages to the latest bookmark.
-// The redirect itself runs in background.js (so it works with the popup closed);
-// here we only persist the toggle + the LinkedIn profile URL it needs.
-const focusRedirectEl = document.getElementById("focusRedirect");
-if (focusRedirectEl) {
-  focusRedirectEl.addEventListener("change", async () => {
-    const enabled = focusRedirectEl.checked;
-    log("focus.redirect.toggle", { enabled });
-    await chrome.storage.local.set({ focus_redirect_enabled: enabled });
+// Bounce to Reading Material — redirect each social platform's home feed to the
+// latest bookmark, one toggle per platform. The redirect itself runs in
+// background.js (so it works with the popup closed); here we only persist each
+// platform's flag + the LinkedIn profile URL it needs.
+
+// Heads-up helper: bookmark count in the Reading Material folder, or -1 if we
+// can't tell. Used to warn when a platform is switched on with nothing to bounce to.
+async function readingMaterialCount() {
+  try {
+    if (!chrome.bookmarks) return -1;
+    const id = await findReadingFolderId();
+    return id ? (await chrome.bookmarks.getChildren(id)).filter((k) => k.url).length : 0;
+  } catch (err) {
+    logWarn("focus.redirect.count.fail", { error: err.message });
+    return -1;
+  }
+}
+
+for (const s of FOCUS_REDIRECT_SITES) {
+  const el = document.getElementById(s.elId);
+  if (!el) continue;
+  el.addEventListener("change", async () => {
+    const enabled = el.checked;
+    log("focus.redirect.toggle", { platform: s.storageKey, enabled });
+    await chrome.storage.local.set({ [s.storageKey]: enabled });
     if (!enabled) {
-      notify("Bounce to Reading Material OFF", "info");
+      notify("Bounce " + s.label + " OFF", "info");
       return;
     }
-    // Heads-up if there's nothing to bounce to yet.
-    let count = -1;
-    try {
-      if (chrome.bookmarks) {
-        const id = await findReadingFolderId();
-        count = id ? (await chrome.bookmarks.getChildren(id)).filter((k) => k.url).length : 0;
-      }
-    } catch (err) {
-      logWarn("focus.redirect.count.fail", { error: err.message });
-    }
-    if (count === 0) notify("Bounce ON — Reading Material is empty, save some pages first", "info");
-    else notify("Bounce to Reading Material ON", "ok");
+    // Turning a platform on: warn if there's nothing to bounce to yet.
+    const count = await readingMaterialCount();
+    if (count === 0) notify("Bounce " + s.label + " ON — Reading Material is empty, save some pages first", "info");
+    else notify("Bounce " + s.label + " ON", "ok");
   });
 }
 

@@ -361,13 +361,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //  http(s) target (CLAUDE.md: scheme-allowlist any URL before navigating).
 // ═══════════════════════════════════
 const READING_FOLDER_NAME = "Reading Material";
-const KEY_FOCUS_REDIRECT_ENABLED = "focus_redirect_enabled";
+// Bounce is configured per social platform — one toggle each. (The old global
+// `focus_redirect_enabled` key is migrated into these on upgrade; see the
+// onInstalled hook below.)
+const FOCUS_REDIRECT_KEYS = {
+  youtube: "focus_redirect_youtube",
+  linkedin: "focus_redirect_linkedin",
+  facebook: "focus_redirect_facebook",
+  instagram: "focus_redirect_instagram",
+};
 const KEY_FOCUS_REDIRECT_LI = "focus_redirect_li_profile";
 
-let focusRedirectEnabled = false;
+const focusRedirectPlatforms = { youtube: false, linkedin: false, facebook: false, instagram: false };
 let focusRedirectLiSlug = "";
 let focusRedirectLiRe = null;
 const pendingRedirectToast = new Map(); // tabId → toast message awaiting page load
+
+// Map a focusRedirectReason() label ("youtube-home", "linkedin-profile", …) to
+// its platform key, so we can consult that platform's toggle. Returns null for
+// anything not backed by a known toggle.
+function platformForReason(reason) {
+  if (!reason) return null;
+  const platform = String(reason).split("-")[0];
+  return platform in focusRedirectPlatforms ? platform : null;
+}
 
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -487,9 +504,10 @@ function showRedirectToast(message) {
 
 async function maybeRedirectTab(tabId, rawUrl) {
   await focusRedirectReady;
-  if (!focusRedirectEnabled) return;
   const reason = focusRedirectReason(rawUrl);
   if (!reason) return;
+  const platform = platformForReason(reason);
+  if (!platform || !focusRedirectPlatforms[platform]) return; // this platform's bounce is off
   let target;
   try {
     target = await getLatestReadingUrl();
@@ -531,10 +549,12 @@ async function sweepOpenTabsForRedirect() {
 
 const focusRedirectReady = (async () => {
   try {
-    const d = await chrome.storage.local.get([KEY_FOCUS_REDIRECT_ENABLED, KEY_FOCUS_REDIRECT_LI]);
-    focusRedirectEnabled = d[KEY_FOCUS_REDIRECT_ENABLED] === true;
+    const d = await chrome.storage.local.get([...Object.values(FOCUS_REDIRECT_KEYS), KEY_FOCUS_REDIRECT_LI]);
+    for (const [platform, key] of Object.entries(FOCUS_REDIRECT_KEYS)) {
+      focusRedirectPlatforms[platform] = d[key] === true;
+    }
     setFocusRedirectLi(d[KEY_FOCUS_REDIRECT_LI]);
-    SL.log.info("bg", "focusRedirect.restored", { enabled: focusRedirectEnabled, hasLiProfile: !!focusRedirectLiSlug });
+    SL.log.info("bg", "focusRedirect.restored", { platforms: { ...focusRedirectPlatforms }, hasLiProfile: !!focusRedirectLiSlug });
   } catch (err) {
     SL.log.warn("bg", "focusRedirect.restore.fail", { error: err.message });
   }
@@ -546,11 +566,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
     setFocusRedirectLi(changes[KEY_FOCUS_REDIRECT_LI].newValue);
     SL.log.info("bg", "focusRedirect.liProfile.updated", { hasLiProfile: !!focusRedirectLiSlug });
   }
-  if (KEY_FOCUS_REDIRECT_ENABLED in changes) {
-    focusRedirectEnabled = changes[KEY_FOCUS_REDIRECT_ENABLED].newValue === true;
-    SL.log.info("bg", "focusRedirect.enabledChanged", { enabled: focusRedirectEnabled });
-    if (focusRedirectEnabled) sweepOpenTabsForRedirect(); // bounce already-open time-sink tabs
+  let turnedOn = false;
+  for (const [platform, key] of Object.entries(FOCUS_REDIRECT_KEYS)) {
+    if (!(key in changes)) continue;
+    focusRedirectPlatforms[platform] = changes[key].newValue === true;
+    SL.log.info("bg", "focusRedirect.platformChanged", { platform, enabled: focusRedirectPlatforms[platform] });
+    if (focusRedirectPlatforms[platform]) turnedOn = true;
   }
+  if (turnedOn) sweepOpenTabsForRedirect(); // bounce already-open time-sink tabs
 });
 
 chrome.webNavigation.onBeforeNavigate.addListener((d) => {
@@ -591,6 +614,23 @@ chrome.runtime.onInstalled.addListener(() => {
   ];
   chrome.storage.local.remove(ORPHAN_KEYS, () => {
     SL.log.info("bg", "orphan.cleanup", { keys: ORPHAN_KEYS });
+  });
+
+  // Migrate the old single bounce toggle to the new per-platform toggles. When
+  // `focus_redirect_enabled` was ON it bounced every platform, so seed all four
+  // per-platform keys; either way drop the legacy key. Idempotent — once the
+  // key is gone this is a no-op. (Kept out of ORPHAN_KEYS above so we can read
+  // its value before removing it.)
+  chrome.storage.local.get(["focus_redirect_enabled"], (d) => {
+    if (d.focus_redirect_enabled === undefined) return; // nothing to migrate
+    const seed = d.focus_redirect_enabled === true
+      ? { focus_redirect_youtube: true, focus_redirect_linkedin: true, focus_redirect_facebook: true, focus_redirect_instagram: true }
+      : {};
+    chrome.storage.local.set(seed, () => {
+      chrome.storage.local.remove(["focus_redirect_enabled"], () => {
+        SL.log.info("bg", "focusRedirect.migrated", { seeded: Object.keys(seed).length > 0 });
+      });
+    });
   });
 
   // Also drop the orphan session-storage key from the old Tab Cleaner tabActivity.
