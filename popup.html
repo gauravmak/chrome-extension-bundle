@@ -499,6 +499,50 @@
     .quick-status.ok { color: #4caf50; }
     .quick-status.err { color: #e94560; }
 
+    /* ── Local AI capability probe ── */
+    .localai-group { margin-bottom: 14px; }
+    .localai-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; background: #16213e;
+      border: 1px solid #2a2a4a; border-radius: 8px;
+      margin-bottom: 4px;
+    }
+    .localai-row .localai-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #444; flex-shrink: 0;
+    }
+    .localai-dot.ok      { background: #4caf50; }
+    .localai-dot.warn    { background: #f0a020; }
+    .localai-dot.pending { background: #6ab0f3; }
+    .localai-dot.bad     { background: #e94560; }
+    .localai-row .localai-name {
+      font-size: 12px; font-weight: 600;
+      width: 118px; flex-shrink: 0;
+    }
+    .localai-row .localai-state {
+      font-size: 11px; color: #999;
+      flex: 1; min-width: 0; line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .localai-actions { margin-bottom: 14px; }
+    .localai-btn {
+      width: 100%; padding: 11px 10px;
+      background: #16213e; border: 1px solid #e94560;
+      border-radius: 8px; color: #e94560;
+      font-size: 12px; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .localai-btn:hover:not(:disabled) { background: #1b2a4a; }
+    .localai-btn:focus { outline: none; }
+    .localai-btn:disabled {
+      border-color: #2a2a4a; color: #666; cursor: default;
+    }
+    .localai-note {
+      font-size: 11px; color: #555;
+      line-height: 1.5; padding: 2px 2px 10px;
+    }
+
     /* ── Localhost Jumper ── */
     .localhost-header {
       display: flex; align-items: center; justify-content: space-between;
@@ -719,6 +763,7 @@
     <button data-page="jsonformat">{} JSON</button>
     <button data-page="darkmode">🌙 Dark</button>
     <button data-page="nocookie">🚫 GDPR</button>
+    <button data-page="localai">🤖 AI</button>
   </div>
 
   <!-- ═══ Quick Actions Page ═══ -->
@@ -1143,6 +1188,42 @@
       <div class="xdim-note">
         Only triggers on actual JSON responses.<br>
         Regular HTML pages are never affected.
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Local AI Page ═══ -->
+  <div class="page" id="page-localai">
+    <div class="page-body">
+      <div class="localhost-header">
+        <h2>On-device AI backends</h2>
+        <button class="lh-refresh" id="localaiRefresh">↻ Re-probe</button>
+      </div>
+      <div class="localai-note">
+        Read-only capability probe. Nothing is downloaded or run until you press a button below.
+      </div>
+
+      <h2>Chrome built-in AI (Gemini Nano)</h2>
+      <div class="localai-group" id="localaiBuiltin">
+        <div class="empty">Probing…</div>
+      </div>
+      <div class="localai-actions" id="localaiDownloadWrap" style="display:none">
+        <button class="localai-btn" id="localaiDownloadBtn">⬇ Download Gemini Nano</button>
+      </div>
+
+      <h2>WebGPU</h2>
+      <div class="localai-group" id="localaiWebgpu">
+        <div class="empty">Probing…</div>
+      </div>
+
+      <h2>WebAssembly</h2>
+      <div class="localai-group" id="localaiWasm">
+        <div class="empty">Probing…</div>
+      </div>
+
+      <div class="localai-note">
+        Step 1 of the local-AI roadmap — later features (semantic bookmark search,
+        summarize-on-bounce) pick a backend from this list at runtime.
       </div>
     </div>
   </div>

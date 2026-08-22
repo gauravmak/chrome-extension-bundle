@@ -32,6 +32,7 @@ function switchToPage(page) {
   if (page === "focus") loadFocus();
   if (page === "jsonformat") loadJsonFormat();
   if (page === "localhost") loadLocalhost();
+  if (page === "localai") loadLocalAI();
   chrome.storage.local.set({ last_tab: page });
 }
 
@@ -2011,6 +2012,301 @@ function renderLocalhostList(query) {
     });
   });
 }
+
+// ═══════════════════════════════════
+//  Local AI — on-device backend capability probe
+//
+//  Step 1 of the local-AI roadmap: report which on-device AI backends this
+//  browser actually offers, so later features (semantic search over bookmarks,
+//  summarize-on-bounce) can pick one at runtime instead of guessing.
+//
+//  Everything here is read-only and lazy: probes run when the AI page is
+//  opened, never on popup boot, so popup open stays snappy. Nothing is
+//  persisted — the answer depends on the browser build, the GPU stack and
+//  whether the model is on disk, all of which change underneath us. We never
+//  call .create() implicitly either: for the built-in APIs that kicks off a
+//  multi-GB Gemini Nano download, so it lives behind an explicit button.
+// ═══════════════════════════════════
+
+// Chrome 138+ exposes these as bare globals inside extension pages. They all
+// sit on top of the same Gemini Nano weights, so one download serves all four.
+// Translator.availability() requires a language pair (each pair is its own
+// download), so we probe one representative pair and say so in the label.
+const LOCALAI_BUILTIN = [
+  { key: "LanguageModel",    label: "Language Model" },
+  { key: "Summarizer",       label: "Summarizer" },
+  { key: "Translator",       label: "Translator (en→hi)", args: { sourceLanguage: "en", targetLanguage: "hi" } },
+  { key: "LanguageDetector", label: "Lang Detector" },
+];
+
+// availability() states → dot colour + a short gloss. Any state not listed
+// here is shown verbatim (the spec is still moving; don't swallow new values).
+const LOCALAI_STATES = {
+  available:    { dot: "ok",      gloss: "model ready on device" },
+  downloadable: { dot: "warn",    gloss: "supported, model not downloaded yet" },
+  downloading:  { dot: "pending", gloss: "model download in progress" },
+  unavailable:  { dot: "bad",     gloss: "not supported on this device" },
+};
+
+// Row handles for the built-in APIs, keyed by API name, so the download
+// progress listener can write into the LanguageModel row as it streams.
+let localaiRows = {};
+// Bumped on every probe run; an in-flight probe whose seq is stale stops
+// writing to the DOM (guards against overlapping re-probes).
+let localaiSeq = 0;
+
+// Build one "● Name  state text" row. Returns handles so the caller can
+// update the state line in place later. textContent only — every value here
+// (adapter names, availability strings, error messages) is browser-supplied.
+function localaiAddRow(container, name, state, dot) {
+  const row = document.createElement("div");
+  row.className = "localai-row";
+
+  const dotEl = document.createElement("div");
+  dotEl.className = "localai-dot" + (dot ? " " + dot : "");
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "localai-name";
+  nameEl.textContent = name;
+
+  const stateEl = document.createElement("div");
+  stateEl.className = "localai-state";
+  stateEl.textContent = state;
+
+  row.appendChild(dotEl);
+  row.appendChild(nameEl);
+  row.appendChild(stateEl);
+  container.appendChild(row);
+  return { row, dotEl, stateEl };
+}
+
+function localaiSetRow(handle, state, dot) {
+  if (!handle) return;
+  handle.stateEl.textContent = state;
+  handle.dotEl.className = "localai-dot" + (dot ? " " + dot : "");
+}
+
+// ── 1. Chrome built-in AI (Gemini Nano) ──
+async function localaiProbeBuiltin(seq) {
+  const wrap = document.getElementById("localaiBuiltin");
+  if (!wrap) return;
+  wrap.textContent = "";
+  localaiRows = {};
+  for (const api of LOCALAI_BUILTIN) {
+    localaiRows[api.key] = localaiAddRow(wrap, api.label, "checking…", "pending");
+  }
+
+  const results = {};
+  let downloadable = false;
+  for (const api of LOCALAI_BUILTIN) {
+    if (seq !== localaiSeq) return;
+    const handle = localaiRows[api.key];
+    // Table-driven equivalent of `typeof LanguageModel !== "undefined"` —
+    // a missing global reads back as undefined rather than throwing.
+    const ns = globalThis[api.key];
+    if (typeof ns === "undefined" || !ns || typeof ns.availability !== "function") {
+      results[api.key] = "absent";
+      localaiSetRow(handle, "not in this Chrome", "bad");
+      continue;
+    }
+    try {
+      // availability() can reject outright on unsupported platforms.
+      const state = String(await (api.args ? ns.availability(api.args) : ns.availability()));
+      if (seq !== localaiSeq) return;
+      results[api.key] = state;
+      const meta = LOCALAI_STATES[state];
+      localaiSetRow(handle, meta ? state + " — " + meta.gloss : state, meta ? meta.dot : "");
+      if (state === "downloadable") downloadable = true;
+    } catch (err) {
+      if (seq !== localaiSeq) return;
+      results[api.key] = "error";
+      localaiSetRow(handle, "probe failed: " + ((err && err.message) || "unknown"), "bad");
+    }
+  }
+
+  // The download button drives LanguageModel.create(), so only offer it when
+  // that API exists. All four share the same weights, so any "downloadable"
+  // among them means the same one download.
+  const wantsDownload = downloadable && typeof globalThis.LanguageModel !== "undefined";
+  const dlWrap = document.getElementById("localaiDownloadWrap");
+  if (dlWrap) dlWrap.style.display = wantsDownload ? "" : "none";
+
+  logInfo("localai.builtin.probed", results);
+}
+
+// ── 2. WebGPU ──
+async function localaiProbeWebGPU(seq) {
+  const wrap = document.getElementById("localaiWebgpu");
+  if (!wrap) return;
+  wrap.textContent = "";
+  const adapterRow = localaiAddRow(wrap, "Adapter", "checking…", "pending");
+
+  try {
+    if (!navigator.gpu) {
+      localaiSetRow(adapterRow, "unavailable — navigator.gpu missing", "bad");
+      logInfo("localai.webgpu.probed", { tier: "unavailable", reason: "no-navigator-gpu" });
+      return;
+    }
+
+    let adapter = await navigator.gpu.requestAdapter();
+    if (seq !== localaiSeq) return;
+    let tier = "core";
+    if (!adapter) {
+      // No core adapter — typical on Linux with the Vulkan flag off. Chrome
+      // can still hand back a reduced-capability compatibility-mode adapter,
+      // which is enough for many WASM/WebGPU inference runtimes.
+      adapter = await navigator.gpu.requestAdapter({ featureLevel: "compatibility" });
+      if (seq !== localaiSeq) return;
+      tier = "compat";
+    }
+    if (!adapter) {
+      localaiSetRow(adapterRow, "unavailable — no adapter in core or compatibility mode", "bad");
+      logInfo("localai.webgpu.probed", { tier: "unavailable", reason: "no-adapter" });
+      return;
+    }
+
+    // adapter.info is a recent addition and its fields are all optional.
+    const info = adapter.info || {};
+    const nameBits = [];
+    if (info.description) nameBits.push(String(info.description));
+    if (info.vendor) nameBits.push(String(info.vendor));
+    if (info.architecture) nameBits.push(String(info.architecture));
+    const gpuName = nameBits.length ? nameBits.join(" / ") : "unnamed adapter";
+
+    const has = (f) => {
+      try { return !!(adapter.features && adapter.features.has(f)); } catch (_) { return false; }
+    };
+    const f16 = has("shader-f16");
+    const subgroups = has("subgroups");
+
+    const label = tier === "core"
+      ? "core adapter (" + gpuName + ", f16 " + (f16 ? "yes" : "no") + ")"
+      : "compatibility mode only (" + gpuName + ", f16 " + (f16 ? "yes" : "no") + ")";
+    localaiSetRow(adapterRow, label, tier === "core" ? "ok" : "warn");
+
+    localaiAddRow(
+      wrap,
+      "Features",
+      "shader-f16: " + (f16 ? "yes" : "no") + " • subgroups: " + (subgroups ? "yes" : "no"),
+      f16 ? "ok" : "warn",
+    );
+
+    logInfo("localai.webgpu.probed", { tier, gpuName, f16, subgroups });
+  } catch (err) {
+    if (seq !== localaiSeq) return;
+    localaiSetRow(adapterRow, "probe failed: " + ((err && err.message) || "unknown"), "bad");
+    logError("localai.webgpu.probe.fail", { error: (err && err.message) || "unknown" });
+  }
+}
+
+// ── 3. WebAssembly ──
+// Minimal SIMD validation module: a function typed () -> () whose body is
+// `i32.const 0; i8x16.splat; drop; end`. The 0xfd-prefixed splat opcode is
+// the SIMD feature gate — engines without SIMD reject the module, so
+// validate() alone answers the question. Static bytes, never compiled from
+// a string, so this stays inside the no-dynamic-code rule.
+const LOCALAI_WASM_SIMD_BYTES = [
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,             // type section: () -> ()
+  0x03, 0x02, 0x01, 0x00,                         // function section
+  0x0a, 0x09, 0x01, 0x07, 0x00,                   // code section header
+  0x41, 0x00,                                     // i32.const 0
+  0xfd, 0x0f,                                     // i8x16.splat  ← SIMD gate
+  0x1a,                                           // drop
+  0x0b,                                           // end
+];
+
+function localaiProbeWasm() {
+  const wrap = document.getElementById("localaiWasm");
+  if (!wrap) return;
+  wrap.textContent = "";
+
+  if (typeof WebAssembly === "undefined") {
+    localaiAddRow(wrap, "Runtime", "unavailable — no WebAssembly in this context", "bad");
+    logInfo("localai.wasm.probed", { wasm: false, simd: false });
+    return;
+  }
+  localaiAddRow(wrap, "Runtime", "available", "ok");
+
+  let simd = false;
+  try {
+    simd = WebAssembly.validate(new Uint8Array(LOCALAI_WASM_SIMD_BYTES));
+  } catch (err) {
+    logError("localai.wasm.simd.fail", { error: (err && err.message) || "unknown" });
+  }
+  localaiAddRow(wrap, "SIMD", simd ? "supported" : "not supported", simd ? "ok" : "warn");
+  logInfo("localai.wasm.probed", { wasm: true, simd });
+}
+
+// Entry point — fired from switchToPage when the AI tab becomes visible.
+// The three probes are independent, so they run concurrently and each paints
+// its own rows as it resolves; nothing here blocks the popup.
+function loadLocalAI() {
+  const seq = ++localaiSeq;
+  logInfo("localai.probe.start", { seq });
+  const dlWrap = document.getElementById("localaiDownloadWrap");
+  if (dlWrap) dlWrap.style.display = "none";
+  localaiProbeWasm();
+  localaiProbeBuiltin(seq).catch((err) =>
+    logError("localai.builtin.probe.fail", { error: (err && err.message) || "unknown" }));
+  localaiProbeWebGPU(seq).catch((err) =>
+    logError("localai.webgpu.probe.fail", { error: (err && err.message) || "unknown" }));
+}
+
+document.getElementById("localaiRefresh").addEventListener("click", () => {
+  log("localai.reprobe");
+  notify("Re-probing local AI backends…", "info");
+  loadLocalAI();
+});
+
+// The only step in this page that costs anything: pulling the Gemini Nano
+// weights (multi-GB). Explicit click, never automatic.
+document.getElementById("localaiDownloadBtn").addEventListener("click", async () => {
+  log("localai.nano.download");
+  const btn = document.getElementById("localaiDownloadBtn");
+  const row = localaiRows.LanguageModel;
+  if (typeof globalThis.LanguageModel === "undefined") {
+    notifyErr("LanguageModel API not available in this Chrome");
+    return;
+  }
+  notify("Starting Gemini Nano download…", "info");
+  btn.disabled = true;
+  btn.textContent = "Downloading…";
+  localaiSetRow(row, "download starting…", "pending");
+
+  let session = null;
+  try {
+    session = await LanguageModel.create({
+      monitor(m) {
+        m.addEventListener("downloadprogress", (e) => {
+          // Chrome reports `loaded` as a 0–1 fraction; older builds paired it
+          // with a `total`. Handle both, and never trust it to be a number.
+          const loaded = Number(e && e.loaded);
+          if (!Number.isFinite(loaded)) return;
+          const total = Number(e && e.total);
+          const raw = (Number.isFinite(total) && total > 0) ? (loaded / total) * 100 : loaded * 100;
+          const pct = Math.max(0, Math.min(100, Math.round(raw)));
+          btn.textContent = "Downloading… " + pct + "%";
+          localaiSetRow(row, "downloading… " + pct + "%", "pending");
+        });
+      },
+    });
+    logInfo("localai.nano.download.done");
+    notifyOk("Gemini Nano ready");
+    localaiSetRow(row, "available — model ready on device", "ok");
+  } catch (err) {
+    logError("localai.nano.download.fail", { error: (err && err.message) || "unknown" });
+    notifyErr("Download failed: " + ((err && err.message) || "unknown"));
+    localaiSetRow(row, "download failed: " + ((err && err.message) || "unknown"), "bad");
+  } finally {
+    // We only wanted the weights on disk — release the session immediately so
+    // it isn't holding the model resident for the life of the popup.
+    try { if (session && typeof session.destroy === "function") session.destroy(); } catch (_) {}
+    btn.disabled = false;
+    btn.textContent = "⬇ Download Gemini Nano";
+    loadLocalAI(); // re-probe: every API's state may have flipped to available
+  }
+});
 
 // ═══════════════════════════════════
 //  Helpers
