@@ -139,7 +139,34 @@
       const summary = { found: entries.length, withTtl, withLut, byType };
       if (withTtl > 0) { summary.minTtl = minTtl; summary.maxTtl = maxTtl; }
       if (withLut > 0) { summary.minLutAgeMin = minLutAge; summary.maxLutAgeMin = maxLutAge; }
-      report("info", "msal.scan", { reason, at: t(), ...summary, entries: entries.slice(0, 30) });
+
+      // Closed-tab blind-spot measurement. The content script only scans while
+      // the tab is alive, so an expiry that happens while the tab is closed or
+      // the laptop is asleep is invisible until reopen (the 07-14 episode was
+      // exactly this: healthy at 07:01, dead-on-arrival at 10:57 after a ~235min
+      // gap). Persist our own last-scan wall-clock in a namespaced key and, on
+      // startup, record how long we were dark — this quantifies what fraction of
+      // episodes are closed-tab vs catchable in-tab. Our key can't be mistaken
+      // for a token: scanMsalTokens's key filter never matches "sl_teams_*".
+      let sinceLastScanMin = null;
+      try {
+        const prev = Number(window.localStorage.getItem("sl_teams_lastScanAt"));
+        if (Number.isFinite(prev) && prev > 1e12) {
+          sinceLastScanMin = Math.round((Date.now() - prev) / 60000);
+        }
+        window.localStorage.setItem("sl_teams_lastScanAt", String(Date.now()));
+      } catch (_) { /* localStorage can throw in a partially torn-down page */ }
+
+      // The per-token entries array is heavy (key names + ages for up to 30
+      // tokens). Keep it only for diagnostic moments — startup and the instant a
+      // banner is detected — and ship summary-only for the every-60s interval/
+      // visible scans, so the ring holds many more episodes before wrapping.
+      const heavy = reason === "startup" || reason === "signin-detected";
+      report("info", "msal.scan", {
+        reason, at: t(), ...summary,
+        ...(reason === "startup" && sinceLastScanMin !== null ? { sinceLastScanMin } : {}),
+        ...(heavy ? { entries: entries.slice(0, 30) } : {}),
+      });
     } catch (err) {
       report("warn", "msal.scan.fail", { error: err.message });
     }
@@ -192,12 +219,14 @@
     try {
       const fullText = bodyTextWithoutOwnUI().slice(0, SCAN_TEXT_CAP);
       const now = Date.now();
+      let newlyDetected = false;
       for (const p of BANNER_PATTERNS) {
         const m = fullText.match(p.re);
         if (!m) continue;
         const last = lastSeenForPattern.get(p.name) || 0;
         if (now - last < 30_000) continue;  // rate-limit per pattern
         lastSeenForPattern.set(p.name, now);
+        newlyDetected = true;
         const idx = m.index || 0;
         const sample = fullText.slice(Math.max(0, idx - 80), idx + 160).replace(/\s+/g, " ").trim();
         // info-level on purpose: the banner persists and re-logs every 30s
@@ -209,6 +238,12 @@
           online: navigator.onLine,
         });
       }
+      // Pair a token scan with the banner so every episode records the freshest
+      // token's staleness (min/maxLutAgeMin) at the exact moment Teams gave up —
+      // the number that tells us whether an in-tab staleness threshold could have
+      // fired earlier. Implicitly rate-limited: only runs when a pattern newly
+      // logged, i.e. at most once per 30s per pattern.
+      if (newlyDetected) scanMsalTokens("signin-detected");
     } catch (err) {
       report("warn", "banner.scan.fail", { error: err.message });
     }

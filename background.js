@@ -106,7 +106,11 @@ const TEAMS_HOSTS = [
 ];
 
 const KEY_TEAMS_LOG = "teams_log_ring";
-const TEAMS_LOG_CAP = 500;
+// 1000, up from 500: msal.scan entries now ship summary-only except at
+// diagnostic moments (see teams.js), so each entry is far lighter and the ring
+// holds several expiry episodes before wrapping. Entries are small JSON — 1000
+// stays well under the chrome.storage.local quota.
+const TEAMS_LOG_CAP = 1000;
 let teamsLog = [];
 let teamsLogPersistTimer = null;
 
@@ -168,6 +172,24 @@ const TEAMS_401_FIRE_COOLDOWN_MS = 60_000;
 const teams401Timestamps = new Map();  // tabId → number[] (ms epoch)
 const teams401LastFiredAt = new Map(); // tabId → ms epoch
 
+// Stable family tag for a Teams request URL so the exported log can be
+// aggregated by endpoint (jq group_by) across expiry episodes instead of
+// re-deriving families from raw URLs each time. Most-specific first. "media"/
+// "trouter" are the known signed-URL / signaling noise (TEAMS_401_NONSESSION_RE);
+// everything else is a token-gated call whose 401/403 may mean a dead session.
+function teamsEndpointFamily(url) {
+  const u = url || "";
+  if (TEAMS_401_NONSESSION_RE.test(u)) return /\.trouter\./i.test(u) ? "trouter" : "media";
+  if (/\/api\/authsvc\//i.test(u))     return "authsvc";
+  if (/\/api\/chatsvc\//i.test(u))     return "chatsvc";
+  if (/\/api\/mt\//i.test(u))          return "mt";
+  if (/\/api\/mcps\//i.test(u))        return "mcps";
+  if (/\/ups\//i.test(u))              return "ups";
+  if (/\bflightproxy\./i.test(u))      return "flightproxy";
+  if (/^https?:\/\/login\./i.test(u))  return "login";
+  return "other";
+}
+
 chrome.webRequest.onCompleted.addListener(
   (d) => {
     if (d.statusCode < 400) return;
@@ -178,12 +200,23 @@ chrome.webRequest.onCompleted.addListener(
     const sessionRelevant = is401
       && /teams\.microsoft\.com|teams\.cloud\.microsoft/.test(d.url)
       && !TEAMS_401_NONSESSION_RE.test(d.url);
+    // authDenied: the candidate expiry marker we're now collecting evidence for.
+    // The one real expiry episode in the logs was a 403 on authsvc + 404s on
+    // chatsvc — NOT a 401 burst — so the 401-only sessionRelevant signal below
+    // never fired for it. Flag 401 AND 403 on any core (non media/trouter)
+    // endpoint so a future export can test which status+family actually precedes
+    // the banner. Observation only: this does NOT feed the burst detector yet.
+    const endpoint = teamsEndpointFamily(d.url);
+    const authDenied = (d.statusCode === 401 || d.statusCode === 403)
+      && endpoint !== "media" && endpoint !== "trouter";
     bgTeamsReport("info", "teams.http.fail", {
       status: d.statusCode,
       method: d.method,
       type: d.type,
       url: d.url.slice(0, 220),
       tabId: d.tabId,
+      endpoint,
+      ...(authDenied ? { authDenied: true } : {}),
       ...(is401 ? { sessionRelevant } : {}),
     });
     if (!is401) return;
@@ -215,6 +248,7 @@ chrome.webRequest.onErrorOccurred.addListener(
       type: d.type,
       url: d.url.slice(0, 220),
       tabId: d.tabId,
+      endpoint: teamsEndpointFamily(d.url),
     });
   },
   { urls: TEAMS_HOSTS }
