@@ -32,6 +32,7 @@ const FILES = [
   "jsonformat.js",
   "gmaps.js",
   "viewimage.js",
+  "wasend.js",
 ];
 
 const POPUP_FILE = "popup.js";

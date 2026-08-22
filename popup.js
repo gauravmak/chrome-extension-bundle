@@ -2327,3 +2327,217 @@ function isHttpUrl(u) {
     return false;
   }
 }
+
+// ═══════════════════════════════════
+//  WhatsApp send queue (wasend)
+//
+//  Queue editor for the background driver. One line per message:
+//      <phone> | <message>
+//  split on the FIRST pipe — the message keeps every pipe after that.
+//
+//  Guardrails live on both sides of the message boundary: this file validates
+//  so the user sees mistakes before anything opens, and background.js
+//  re-validates because a message payload is untrusted. Sending needs two
+//  clicks — the first arms "Confirm: send N" for 10 seconds and shows exactly
+//  who is about to be messaged.
+// ═══════════════════════════════════
+const WASEND_DRAFT_KEY = "wasend_draft";
+const WASEND_STATUS_KEY = "wasend_status";
+const WASEND_MAX_LINES = 20;
+const WASEND_ARM_MS = 10000;
+
+const wasendDraft = document.getElementById("wasendDraft");
+const wasendParse = document.getElementById("wasendParse");
+const wasendSendBtn = document.getElementById("wasendSend");
+const wasendStopBtn = document.getElementById("wasendStop");
+const wasendExportBtn = document.getElementById("wasendExportLog");
+const wasendProgress = document.getElementById("wasendProgress");
+
+let wasendArmTimer = null; // non-null while "Confirm: send N" is armed
+
+function wasendSetParse(msg, kind) {
+  wasendParse.textContent = msg || "";
+  wasendParse.className = "wasend-parse" + (kind ? " " + kind : "");
+}
+
+function wasendSetProgress(msg, kind) {
+  wasendProgress.textContent = msg || "";
+  wasendProgress.className = "wasend-progress" + (kind ? " " + kind : "");
+}
+
+function wasendNormalizePhone(raw) {
+  const digits = String(raw || "").replace(/[\s\-()+]/g, "");
+  return /^[0-9]{8,15}$/.test(digits) ? digits : null;
+}
+
+// Returns { items } | { error } | { empty: true }.
+function wasendParseDraft(raw) {
+  const lines = String(raw || "").split("\n");
+  const items = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const pipe = line.indexOf("|");
+    if (pipe === -1) return { error: "Line " + (i + 1) + ": missing “|” between phone and message" };
+    const phone = wasendNormalizePhone(line.slice(0, pipe));
+    if (!phone) return { error: "Line " + (i + 1) + ": phone must be 8–15 digits (country code, no leading 0)" };
+    const text = line.slice(pipe + 1).trim(); // remainder verbatim, outer space trimmed
+    if (!text) return { error: "Line " + (i + 1) + ": message is empty" };
+    if (text.length > 4096) return { error: "Line " + (i + 1) + ": message is " + text.length + " chars (max 4096)" };
+    items.push({ phone, text });
+    if (items.length > WASEND_MAX_LINES) return { error: "More than " + WASEND_MAX_LINES + " lines — that is the hard cap per run" };
+  }
+  if (!items.length) return { empty: true };
+  return { items };
+}
+
+function wasendRecipients(items) {
+  return items.map((it) => "+" + it.phone).join(", ");
+}
+
+function wasendRefreshParse() {
+  const parsed = wasendParseDraft(wasendDraft.value);
+  if (parsed.empty) { wasendSetParse("", null); return parsed; }
+  if (parsed.error) { wasendSetParse("✗ " + parsed.error, "err"); return parsed; }
+  wasendSetParse(parsed.items.length + " message" + (parsed.items.length === 1 ? "" : "s") + " → " + wasendRecipients(parsed.items), "ok");
+  return parsed;
+}
+
+function wasendDisarm() {
+  if (wasendArmTimer) clearTimeout(wasendArmTimer);
+  wasendArmTimer = null;
+  wasendSendBtn.textContent = "Send all";
+  wasendSendBtn.classList.remove("armed");
+}
+
+function wasendRenderStatus(st) {
+  const running = !!st && st.state === "running";
+  wasendStopBtn.style.display = running ? "" : "none";
+  if (!st || !st.state || st.state === "idle") { wasendSetProgress("", null); return; }
+  const total = Number(st.total) || 0;
+  const sent = Number(st.sent) || 0;
+  const failed = Number(st.failed) || 0;
+  const current = Number(st.current) || 0;
+  const err = st.lastError ? " — " + String(st.lastError).slice(0, 120) : "";
+  if (running) {
+    wasendSetProgress("Sending " + current + " of " + total + " · " + sent + " sent, " + failed + " failed" + err, "run");
+    return;
+  }
+  const label = st.state === "stopped" ? "Stopped" : "Done";
+  wasendSetProgress(label + " · " + sent + " sent, " + failed + " failed of " + total + err,
+    failed > 0 || st.state === "stopped" ? "err" : "ok");
+}
+
+wasendDraft.addEventListener("input", () => {
+  wasendDisarm(); // editing invalidates any pending confirmation
+  wasendRefreshParse();
+  chrome.storage.local.set({ [WASEND_DRAFT_KEY]: wasendDraft.value });
+});
+
+wasendSendBtn.addEventListener("click", () => {
+  const parsed = wasendRefreshParse();
+  if (parsed.empty) {
+    log("wasend.send.empty");
+    notifyErr("Nothing to send");
+    wasendDisarm();
+    return;
+  }
+  if (parsed.error) {
+    log("wasend.send.invalid", { error: parsed.error });
+    notifyErr("Fix the queue first");
+    wasendDisarm();
+    return;
+  }
+
+  // First click arms; second click within 10s actually sends.
+  if (!wasendArmTimer) {
+    wasendSendBtn.textContent = "Confirm: send " + parsed.items.length;
+    wasendSendBtn.classList.add("armed");
+    wasendSetParse("Will message " + wasendRecipients(parsed.items) + " — click again within 10s", "warn");
+    wasendArmTimer = setTimeout(() => {
+      wasendDisarm();
+      wasendRefreshParse();
+      logInfo("wasend.arm.expired");
+    }, WASEND_ARM_MS);
+    log("wasend.arm", { count: parsed.items.length });
+    notify("Click again to confirm " + parsed.items.length + " message(s)", "info");
+    return;
+  }
+
+  wasendDisarm();
+  log("wasend.start", { count: parsed.items.length });
+  notify("Starting — watch the WhatsApp tab", "info");
+  wasendSetProgress("Starting…", "run");
+  chrome.runtime.sendMessage({ type: "wasend.start", queue: parsed.items }, (res) => {
+    if (chrome.runtime.lastError) {
+      logError("wasend.start.fail", { error: chrome.runtime.lastError.message });
+      notifyErr("Could not reach the extension background");
+      wasendSetProgress("Could not start: " + chrome.runtime.lastError.message, "err");
+      return;
+    }
+    if (!res || res.ok !== true) {
+      const err = (res && res.error) || "rejected";
+      logWarn("wasend.start.rejected", { error: err });
+      notifyErr("Rejected: " + err);
+      wasendSetProgress("Rejected: " + err, "err");
+      return;
+    }
+    logInfo("wasend.start.ok", { total: res.total });
+    notifyOk("Sending " + res.total + " message(s)");
+  });
+});
+
+// Mirrors qbExportTeamsLog: the service-worker console is gone by the time
+// anyone thinks to look, so the persisted ring is dumped to a file instead.
+wasendExportBtn.addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  log("wasend.ui.exportLog");
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "exportWasendLog" });
+    const entries = (resp && Array.isArray(resp.entries)) ? resp.entries : [];
+    const payload = {
+      _superlevels_wasend_log: 1,
+      _exported_at: new Date().toISOString(),
+      _extension_version: chrome.runtime.getManifest().version,
+      cap: resp && resp.cap,
+      entries,
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `wasend-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logInfo("wasend.ui.exportLog.done", { entries: entries.length });
+    flashButton(btn);
+    notifyOk(`Exported ${entries.length} wasend log entries`);
+  } catch (err) {
+    logError("wasend.ui.exportLog.fail", { error: err.message });
+    notifyErr("Debug log export failed: " + (err.message || "unknown"));
+  }
+});
+
+wasendStopBtn.addEventListener("click", () => {
+  log("wasend.stop");
+  notify("Stopping after the current message…", "info");
+  chrome.runtime.sendMessage({ type: "wasend.stop" }, (res) => {
+    if (chrome.runtime.lastError) {
+      logWarn("wasend.stop.fail", { error: chrome.runtime.lastError.message });
+      return;
+    }
+    if (!res || res.ok !== true) logInfo("wasend.stop.noRun", { error: (res && res.error) || "" });
+  });
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !(WASEND_STATUS_KEY in changes)) return;
+  wasendRenderStatus(changes[WASEND_STATUS_KEY].newValue);
+});
+
+chrome.storage.local.get([WASEND_DRAFT_KEY, WASEND_STATUS_KEY], (d) => {
+  if (typeof d[WASEND_DRAFT_KEY] === "string") wasendDraft.value = d[WASEND_DRAFT_KEY];
+  wasendRefreshParse();
+  wasendRenderStatus(d[WASEND_STATUS_KEY]);
+});

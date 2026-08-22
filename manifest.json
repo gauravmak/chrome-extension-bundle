@@ -50,6 +50,10 @@
     "matches": ["*://teams.microsoft.com/*", "*://*.teams.microsoft.com/*", "*://teams.live.com/*", "*://*.teams.cloud.microsoft/*"],
     "js": ["logger.js", "teams.js"],
     "run_at": "document_start"
+  }, {
+    "matches": ["*://web.whatsapp.com/*"],
+    "js": ["logger.js", "wasend.js"],
+    "run_at": "document_idle"
   }],
   "icons": {
     "16": "icon16.png",

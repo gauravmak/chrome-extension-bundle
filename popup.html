@@ -367,6 +367,47 @@
       cursor: pointer;
     }
 
+    /* ── WhatsApp send queue ── */
+    .wasend-editor {
+      width: 100%; min-height: 96px;
+      padding: 10px; font-size: 12px;
+      font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+      background: #0a0a1a; color: #a8d8a8;
+      border: 1px solid #2a2a4a; border-radius: 6px;
+      resize: vertical; line-height: 1.5;
+    }
+    .wasend-editor:focus { outline: none; border-color: #e94560; }
+    .wasend-editor::placeholder { color: #333; }
+    .wasend-parse {
+      font-size: 11px; color: #888;
+      padding: 6px 2px; min-height: 16px;
+      word-break: break-word;
+    }
+    .wasend-parse.ok   { color: #4caf50; }
+    .wasend-parse.warn { color: #f0a020; }
+    .wasend-parse.err  { color: #e94560; }
+    .wasend-btns { display: flex; gap: 6px; margin-top: 4px; }
+    .wasend-btns button {
+      padding: 7px 14px; border-radius: 6px;
+      border: none; font-size: 12px; font-weight: 600;
+      cursor: pointer; background: #333; color: #e0e0e0;
+    }
+    .wasend-btns button:hover { background: #444; }
+    .wasend-btns #wasendSend { background: #25623c; color: #fff; }
+    .wasend-btns #wasendSend:hover { background: #2e7a4b; }
+    .wasend-btns #wasendSend.armed { background: #e94560; color: #fff; }
+    .wasend-btns #wasendSend.armed:hover { background: #c73650; }
+    .wasend-btns #wasendStop { background: #e94560; color: #fff; }
+    .wasend-btns #wasendStop:hover { background: #c73650; }
+    .wasend-progress {
+      font-size: 11px; color: #666;
+      padding: 6px 2px; min-height: 16px;
+      word-break: break-word;
+    }
+    .wasend-progress.run  { color: #6ab0f3; }
+    .wasend-progress.ok   { color: #4caf50; }
+    .wasend-progress.err  { color: #e94560; }
+
     /* ── YouTube Unhook ── */
     .unhook-big-toggle {
       display: flex; flex-direction: column; align-items: center;
@@ -839,6 +880,17 @@
           <span class="qb-hint">Reset ring buffer</span>
         </button>
       </div>
+
+      <h2>📨 WhatsApp send queue</h2>
+      <textarea class="wasend-editor" id="wasendDraft" spellcheck="false"
+        placeholder="One per line:  phone | message&#10;919876543210 | Hi — running late, see you at 7&#10;447700900123 | Docs sent, check your inbox"></textarea>
+      <div class="wasend-parse" id="wasendParse"></div>
+      <div class="wasend-btns">
+        <button id="wasendSend">Send all</button>
+        <button id="wasendStop" style="display:none">Stop</button>
+        <button id="wasendExportLog">Export debug log</button>
+      </div>
+      <div class="wasend-progress" id="wasendProgress"></div>
 
       <div class="quick-status" id="quickStatus"></div>
     </div>

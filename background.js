@@ -633,6 +633,679 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ═══════════════════════════════════
+//  WhatsApp send queue (wasend)
+//
+//  Manually triggered from the popup's Quick tab: a small queue of
+//  `phone | message` lines is sent one at a time through the user's own
+//  WhatsApp Web session, in ONE visible foreground tab the user watches.
+//
+//  v2 — the app is loaded ONCE per run and chats are switched inside it:
+//
+//    1. Adopt a web.whatsapp.com tab the user already has open (or the one
+//       from earlier in this run) and reuse it with NO reload when the content
+//       script answers a ping. Otherwise load the plain app URL into it once —
+//       a run does one app load, or zero if the app was already up.
+//    2. Per item, the PRIMARY path is `wasend.sendInApp`: the content script
+//       searches the chat list for the phone number, opens the one matching
+//       chat and types the text. No reload, no navigation.
+//    3. If that attempt says fallback:true (ambiguous search, no search box,
+//       content script unreachable …) the item — and only that item — is
+//       retried through the v1 deep-link flow, which carries the phone number
+//       in the URL. The next item goes back to trying in-app first.
+//
+//  Each item records mode "in-app" or "url" in the status and the logs. A
+//  fallback success is a success; an item counts as failed only when both
+//  paths fail.
+//
+//  Deliberate guardrails — this is a convenience feature, not a blaster:
+//    • hard cap of WASEND_MAX_ITEMS per run, one run at a time
+//    • every field re-validated here even though the popup validated it
+//      (message payloads are untrusted — CLAUDE.md)
+//    • the URL is assembled ONLY from validated parts, never from a string
+//      handed over by the sender
+//    • randomized 3–8s human-paced gap between items
+//    • the content script refuses to click unless the composer text matches
+//      the validated text exactly (see wasend.js safety gate), and refuses to
+//      open a chat unless the search matched EXACTLY ONE row (ambiguity rule)
+//    • never fall back after a send was attempted — a deep-link retry on top
+//      of an unconfirmed click could double-send
+//    • Stop button, and closing the tab aborts the run
+//
+//  Run state is mirrored to chrome.storage.local[WASEND_STATUS_KEY] so the
+//  popup can render progress without holding a port open. It is ALWAYS
+//  finalized — no exit path leaves state "running". If the MV3 service
+//  worker is killed mid-run the run dies with it; the boot fixup below
+//  reconciles the orphaned "running" status on the next wake.
+// ═══════════════════════════════════
+const WASEND_STATUS_KEY = "wasend_status";
+const WASEND_MAX_ITEMS = 20;
+const WASEND_MIN_GAP_MS = 3000;
+const WASEND_MAX_GAP_MS = 8000;
+const WASEND_ITEM_DEADLINE_MS = 60000; // one delivery attempt's round trip
+const WASEND_CS_RETRY_MS = 10000;      // content script may not be injected yet
+const WASEND_LOAD_DEADLINE_MS = 30000; // tab reaching status "complete"
+const WASEND_SETTLE_MS = 1200;         // let WhatsApp hydrate after "complete"
+const WASEND_APP_URL = "https://web.whatsapp.com/";
+const WASEND_PING_MS = 3000;           // liveness probe budget, per ping
+const WASEND_APP_READY_MS = 45000;     // hydration wait after a fresh load
+
+// ── Persisted diagnostics ring (mirrors the Teams observer's ring) ──
+// The service-worker console is the durable place for these events, but only
+// if someone remembered to open it BEFORE the run. This ring keeps the same
+// events in chrome.storage.local so a failed run can be exported from the
+// popup afterwards. Privacy is identical to the console: structural data
+// only — counts, selector variants, lengths, hashes, reasons. Never message
+// text, never chat titles.
+const KEY_WASEND_LOG = "wasend_log_ring";
+const WASEND_LOG_CAP = 400;
+let wasendLogRing = [];
+let wasendLogPersistTimer = null;
+
+const wasendLogReady = (async () => {
+  try {
+    const data = await chrome.storage.local.get([KEY_WASEND_LOG]);
+    wasendLogRing = Array.isArray(data[KEY_WASEND_LOG]) ? data[KEY_WASEND_LOG] : [];
+    SL.log.info("bg", "wasend.log.restored", { entries: wasendLogRing.length });
+  } catch (err) {
+    SL.log.warn("bg", "wasend.log.restore.fail", { error: err && err.message });
+  }
+})();
+
+function persistWasendLog() {
+  if (wasendLogPersistTimer) return;
+  wasendLogPersistTimer = setTimeout(() => {
+    wasendLogPersistTimer = null;
+    chrome.storage.local.set({ [KEY_WASEND_LOG]: wasendLogRing }).catch((err) => {
+      SL.log.warn("bg", "wasend.log.persist.fail", { error: err && err.message });
+    });
+  }, 250);
+}
+
+function appendWasendLog(entry) {
+  wasendLogRing.push(entry);
+  if (wasendLogRing.length > WASEND_LOG_CAP) {
+    wasendLogRing.splice(0, wasendLogRing.length - WASEND_LOG_CAP);
+  }
+  persistWasendLog();
+}
+
+// The one logging call the wasend section uses: console AND ring, always both.
+function wasendLog(level, action, data) {
+  const fn = SL.log[level] || SL.log.info;
+  fn("bg", action, data);
+  wasendLogReady.then(() => {
+    appendWasendLog({ ts: Date.now(), level, action, data: data || null });
+  });
+}
+
+let wasendRun = null; // { tabId, items, index, sent, failed, lastMode, stopping, stopReason }
+
+function wasendSleepRaw(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+// Interruptible sleep — returns false as soon as the run is asked to stop.
+async function wasendSleep(ms) {
+  const until = Date.now() + Math.max(0, ms);
+  while (Date.now() < until) {
+    if (!wasendRun || wasendRun.stopping) return false;
+    await wasendSleepRaw(Math.min(250, until - Date.now()));
+  }
+  return !!wasendRun && !wasendRun.stopping;
+}
+
+function wasendNonce() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function wasendWriteStatus(status) {
+  chrome.storage.local.set({ [WASEND_STATUS_KEY]: status }).catch((err) => {
+    wasendLog("warn", "wasend.status.persist.fail", { error: err && err.message });
+  });
+}
+
+function wasendSnapshot(state, extra) {
+  const r = wasendRun;
+  const base = {
+    state,
+    total: r ? r.items.length : 0,
+    sent: r ? r.sent : 0,
+    failed: r ? r.failed : 0,
+    current: r ? r.index : 0,
+    lastError: "",
+    mode: r ? (r.lastMode || "") : "", // "in-app" | "url" — how the last item went
+    ts: Date.now(),
+  };
+  return Object.assign(base, extra || {});
+}
+
+function wasendPublish(state, extra) {
+  wasendWriteStatus(wasendSnapshot(state, extra));
+}
+
+// ── Validation — the popup validates too; this is the authoritative pass. ──
+function wasendCleanPhone(raw) {
+  if (typeof raw !== "string") return null;
+  const digits = raw.replace(/[\s\-()+]/g, "");
+  return /^[0-9]{8,15}$/.test(digits) ? digits : null;
+}
+
+function wasendCleanText(raw) {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (t.length < 1 || t.length > 4096) return null;
+  return t;
+}
+
+// Returns { items } or { error }.
+function wasendValidateQueue(queue) {
+  if (!Array.isArray(queue)) return { error: "queue must be an array" };
+  if (queue.length < 1) return { error: "queue is empty" };
+  if (queue.length > WASEND_MAX_ITEMS) return { error: "queue exceeds the cap of " + WASEND_MAX_ITEMS };
+  const items = [];
+  for (let i = 0; i < queue.length; i++) {
+    const raw = queue[i];
+    if (!raw || typeof raw !== "object") return { error: "item " + (i + 1) + ": not an object" };
+    const phone = wasendCleanPhone(raw.phone);
+    if (!phone) return { error: "item " + (i + 1) + ": phone must be 8–15 digits" };
+    const text = wasendCleanText(raw.text);
+    if (!text) return { error: "item " + (i + 1) + ": message must be 1–4096 chars" };
+    items.push({ phone, text });
+  }
+  return { items };
+}
+
+// URL built ONLY from the validated digits + the validated text.
+function wasendUrlFor(item) {
+  return "https://web.whatsapp.com/send?phone=" + item.phone + "&text=" + encodeURIComponent(item.text);
+}
+
+// ── Waiting for the dedicated tab to finish loading ──
+const wasendCompleteWaiters = new Map(); // tabId → resolve fn
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "complete") return;
+  const resolve = wasendCompleteWaiters.get(tabId);
+  if (!resolve) return;
+  wasendCompleteWaiters.delete(tabId);
+  resolve(true);
+});
+
+// Resolves true when the tab reports "complete", false on stop/deadline/gone.
+// The listener above is the primary signal; the poll is a safety net for a
+// "complete" that fired in the gap before we registered, and only trusts a
+// status read once the navigation has certainly started.
+async function wasendWaitForLoad(tabId) {
+  const deadline = Date.now() + WASEND_LOAD_DEADLINE_MS;
+  let settled = false;
+  const viaEvent = new Promise((resolve) => {
+    wasendCompleteWaiters.set(tabId, (v) => { settled = true; resolve(v); });
+  });
+  const viaPoll = (async () => {
+    const pollFrom = Date.now() + 3000;
+    while (!settled && Date.now() < deadline) {
+      await wasendSleepRaw(500);
+      if (settled) return false;
+      if (!wasendRun || wasendRun.stopping) return false;
+      if (Date.now() < pollFrom) continue;
+      let tab = null;
+      try { tab = await chrome.tabs.get(tabId); } catch (_) { return false; }
+      if (!tab) return false;
+      if (tab.status === "complete" && typeof tab.url === "string" &&
+          tab.url.indexOf("https://web.whatsapp.com/") === 0) {
+        settled = true;
+        return true;
+      }
+    }
+    return false;
+  })();
+  const result = await Promise.race([viaEvent, viaPoll]);
+  wasendCompleteWaiters.delete(tabId);
+  return result === true;
+}
+
+// ── One content-script round trip ──
+// Retries only the "cannot reach the content script" case (it may not be
+// injected yet); a real reply — including a refusal — is final.
+//
+// `fallback` in the result means "nothing was sent and nothing was clicked, so
+// this item may safely be retried through the deep link". Only the content
+// script's own verdict and a never-reached content script qualify: a timeout
+// or a garbled reply is deliberately NOT a fallback, because the send may have
+// gone through without us hearing about it.
+async function wasendRoundTrip(tabId, payload, deadlineAt) {
+  const nonce = wasendNonce();
+  const retryUntil = Date.now() + WASEND_CS_RETRY_MS;
+  while (true) {
+    if (!wasendRun || wasendRun.stopping) return { ok: false, reason: "stopped" };
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) return { ok: false, reason: "timeout" };
+    try {
+      const raced = await Promise.race([
+        chrome.tabs.sendMessage(tabId, Object.assign({ nonce }, payload)),
+        wasendSleepRaw(remaining).then(() => ({ __timeout: true })),
+      ]);
+      if (raced && raced.__timeout) return { ok: false, reason: "timeout" };
+      if (!raced || typeof raced !== "object") return { ok: false, reason: "bad-reply" };
+      if (raced.nonce !== nonce) return { ok: false, reason: "nonce-mismatch" };
+      if (raced.ok === true) {
+        return { ok: true, reason: "", diag: typeof raced.diag === "string" ? raced.diag.slice(0, 200) : "" };
+      }
+      return {
+        ok: false,
+        reason: String(raced.reason || "unknown").slice(0, 60),
+        fallback: raced.fallback === true,
+        // Structural crumb trail from the content script — see wasend.js.
+        diag: typeof raced.diag === "string" ? raced.diag.slice(0, 200) : "",
+      };
+    } catch (err) {
+      // No receiving end yet → the content script is still loading.
+      if (Date.now() < retryUntil && Date.now() < deadlineAt) {
+        wasendLog("debug", "wasend.cs.retry", { error: (err && err.message) || "unreachable" });
+        if (!(await wasendSleep(1000))) return { ok: false, reason: "stopped" };
+        continue;
+      }
+      return { ok: false, reason: "no-content-script", fallback: true };
+    }
+  }
+}
+
+// v1 path: the chat and the text came from the deep link already in the tab.
+function wasendDeliver(tabId, item, deadlineAt) {
+  return wasendRoundTrip(tabId, { type: "wasend.send", expectText: item.text }, deadlineAt);
+}
+
+// v2 path: the app is loaded; the content script switches chats in-app.
+function wasendDeliverInApp(tabId, item, deadlineAt) {
+  return wasendRoundTrip(
+    tabId,
+    { type: "wasend.sendInApp", phone: item.phone, expectText: item.text },
+    deadlineAt,
+  );
+}
+
+// Read-only liveness probe. { ok:true, state, detail } or { ok:false, reason }.
+async function wasendPingTab(tabId) {
+  const nonce = wasendNonce();
+  try {
+    const raced = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { type: "wasend.ping", nonce }),
+      wasendSleepRaw(WASEND_PING_MS).then(() => ({ __timeout: true })),
+    ]);
+    if (!raced || typeof raced !== "object") return { ok: false, reason: "ping-bad-reply" };
+    if (raced.__timeout) return { ok: false, reason: "ping-timeout" };
+    if (raced.nonce !== nonce) return { ok: false, reason: "ping-nonce-mismatch" };
+    const state = typeof raced.state === "string" ? raced.state : "";
+    if (state !== "ready" && state !== "logged-out" && state !== "loading") {
+      return { ok: false, reason: "ping-bad-reply" };
+    }
+    const detail = (raced.detail && typeof raced.detail === "object") ? raced.detail : {};
+    return { ok: true, state, detail };
+  } catch (_) {
+    // "Receiving end does not exist" — either the tab has no content script
+    // yet, or it has an ORPHANED one from before the extension was reloaded.
+    return { ok: false, reason: "no-content-script" };
+  }
+}
+
+async function wasendTabIsOnApp(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return !!(tab && typeof tab.url === "string" && tab.url.indexOf(WASEND_APP_URL) === 0);
+  } catch (_) {
+    return false;
+  }
+}
+
+// A web.whatsapp.com tab the user already has open, or null. Adopting it
+// beats opening our own: WhatsApp drives exactly one window and parks every
+// other tab on "WhatsApp is open in another window", so a second tab would
+// break the run outright.
+async function wasendAdoptTab() {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });
+    if (!tabs || !tabs.length) return null;
+    const id = tabs[0].id;
+    return id != null ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Make sure the dedicated tab has WhatsApp up and the content script talking.
+// Reusing an already-loaded app with NO reload is the whole point of v2 — a
+// run over N items should load the app once, or zero times if the user already
+// had it open in this tab. Returns { ok:true, reused } | { ok:false, reason,
+// fatal? }; `fatal` means the run itself is over (not logged in).
+async function wasendEnsureApp() {
+  const r = wasendRun;
+  if (!r || r.stopping) return { ok: false, reason: "stopped" };
+
+  // Once per run: take over an already-open WhatsApp tab. If it is already
+  // hydrated this makes the whole run zero-reload.
+  let adoptedNow = false;
+  if (r.tabId === null) {
+    const adopted = await wasendAdoptTab();
+    if (adopted !== null) {
+      r.tabId = adopted;
+      adoptedNow = true;
+      wasendLog("info", "wasend.app.adopt", { tabId: adopted });
+      try {
+        await chrome.tabs.update(adopted, { active: true }); // focus, no reload
+      } catch (_) { /* still usable even if it can't be focused */ }
+    }
+  }
+
+  if (r.tabId !== null && (await wasendTabIsOnApp(r.tabId))) {
+    const ping = await wasendPingTab(r.tabId);
+    if (ping.ok && ping.state === "ready") {
+      wasendLog("info", "wasend.app.reuse", { tabId: r.tabId, adopted: adoptedNow, detail: ping.detail });
+      return { ok: true, reused: true };
+    }
+    if (ping.ok && ping.state === "logged-out") {
+      return { ok: false, reason: "not-logged-in", fatal: true };
+    }
+    // We are about to reload a tab the user already had open. Say exactly why,
+    // because the most common cause looks like a bug and isn't: reloading the
+    // extension orphans the content script in every tab that was already open,
+    // so the very first run after a reload always costs one page load.
+    if (adoptedNow) {
+      wasendLog("warn", "wasend.app.adopt.reload", {
+        tabId: r.tabId,
+        reason: ping.ok ? ("state:" + ping.state) : ping.reason,
+        why: ping.reason === "no-content-script"
+          ? "orphaned content script — this tab predates the last extension reload; one reload expected, later runs reuse it"
+          : "app not ready yet in the adopted tab",
+        detail: ping.detail || {},
+      });
+    }
+  }
+
+  // Plain app URL — no deep link, because chats are switched inside the app.
+  if (r.tabId === null) {
+    const tab = await chrome.tabs.create({ active: true, url: WASEND_APP_URL });
+    r.tabId = tab && tab.id != null ? tab.id : null;
+    if (r.tabId === null) return { ok: false, reason: "no-tab" };
+  } else {
+    await chrome.tabs.update(r.tabId, { url: WASEND_APP_URL, active: true });
+  }
+  wasendLog("info", "wasend.app.load", { tabId: r.tabId });
+
+  if (r.stopping) return { ok: false, reason: "stopped" };
+  if (!(await wasendWaitForLoad(r.tabId))) {
+    return { ok: false, reason: r.stopping ? "stopped" : "load-timeout" };
+  }
+  if (!(await wasendSleep(WASEND_SETTLE_MS))) return { ok: false, reason: "stopped" };
+
+  const until = Date.now() + WASEND_APP_READY_MS;
+  let lastPing = { ok: false, reason: "never-pinged" };
+  while (Date.now() < until) {
+    if (!wasendRun || wasendRun.stopping) return { ok: false, reason: "stopped" };
+    const ping = await wasendPingTab(r.tabId);
+    if (ping.ok && ping.state === "ready") {
+      wasendLog("info", "wasend.app.ready", { tabId: r.tabId, detail: ping.detail });
+      return { ok: true, reused: false };
+    }
+    if (ping.ok && ping.state === "logged-out") {
+      return { ok: false, reason: "not-logged-in", fatal: true };
+    }
+    lastPing = ping;
+    if (!(await wasendSleep(1000))) return { ok: false, reason: "stopped" };
+  }
+  wasendLog("warn", "wasend.app.notReady", {
+    tabId: r.tabId,
+    reason: lastPing.ok ? ("state:" + lastPing.state) : lastPing.reason,
+    detail: lastPing.detail || {},
+  });
+  return { ok: false, reason: "app-not-ready" };
+}
+
+// ── The v1 deep-link path, kept intact as the per-item fallback ──
+// Navigates the dedicated tab to /send?phone=…&text=… and lets the content
+// script's gate decide. The recipient comes from the URL, so this path cannot
+// pick the wrong chat — which is exactly why it is what an ambiguous in-app
+// search falls back to.
+async function wasendDeliverViaUrl(item, deadlineAt) {
+  const r = wasendRun;
+  const url = wasendUrlFor(item);
+  if (r.tabId === null) {
+    const tab = await chrome.tabs.create({ active: true, url });
+    r.tabId = tab && tab.id != null ? tab.id : null;
+    if (r.tabId === null) return { ok: false, reason: "no-tab" };
+  } else {
+    await chrome.tabs.update(r.tabId, { url, active: true });
+  }
+  if (r.stopping) return { ok: false, reason: "stopped" };
+  if (!(await wasendWaitForLoad(r.tabId))) {
+    return { ok: false, reason: r.stopping ? "stopped" : "load-timeout" };
+  }
+  if (!(await wasendSleep(WASEND_SETTLE_MS))) return { ok: false, reason: "stopped" };
+  return await wasendDeliver(r.tabId, item, deadlineAt);
+}
+
+// ── The run ──
+async function wasendRunQueue() {
+  const r = wasendRun;
+  for (let i = 0; i < r.items.length; i++) {
+    if (r.stopping) break;
+    const item = r.items[i];
+    r.index = i + 1;
+    wasendPublish("running");
+    wasendLog("info", "wasend.item.start", { n: r.index, of: r.items.length, phone: item.phone, chars: item.text.length });
+
+    let reason = "";
+    let ok = false;
+    let mode = "";
+    let tryUrl = false;
+    let diag = "";
+
+    try {
+      // ── primary: in-app, on the app we already have loaded ──
+      const app = await wasendEnsureApp();
+      if (!app.ok) {
+        reason = app.reason;
+        if (app.fatal) wasendStop(app.reason);
+        // The deep-link path does its own navigation and load wait, so it is
+        // still worth a try when the app merely failed to come up.
+        else if (reason !== "stopped") tryUrl = true;
+      } else {
+        mode = "in-app";
+        const res = await wasendDeliverInApp(r.tabId, item, Date.now() + WASEND_ITEM_DEADLINE_MS);
+        ok = res.ok === true;
+        reason = ok ? "" : (res.reason || "unknown");
+        diag = res.diag || "";
+        if (!ok && reason === "not-logged-in") wasendStop(reason);
+        else tryUrl = !ok && res.fallback === true;
+      }
+
+      // ── fallback: this item only, through the v1 deep link ──
+      if (!ok && tryUrl && !r.stopping) {
+        // reason + diag on ONE line: the content script's own log is about to
+        // be destroyed by this navigation.
+        wasendLog("warn", "wasend.item.fallback", {
+          n: r.index, reason: reason || "unknown", diag: diag || "(none)",
+        });
+        const first = reason;
+        mode = "url";
+        const res = await wasendDeliverViaUrl(item, Date.now() + WASEND_ITEM_DEADLINE_MS);
+        ok = res.ok === true;
+        reason = ok ? "" : ((first ? first + " → " : "") + (res.reason || "unknown")).slice(0, 80);
+      }
+    } catch (err) {
+      ok = false;
+      reason = "error:" + ((err && err.message) || "unknown").slice(0, 60);
+    }
+
+    r.lastMode = mode;
+    r.report.push({ phone: item.phone, mode: mode || "none", ok, reason: reason || "" });
+    if (ok) {
+      r.sent++;
+      wasendLog("action", "wasend.item.sent", { n: r.index, phone: item.phone, chars: item.text.length, mode });
+    } else {
+      r.failed++;
+      r.lastError = reason;
+      wasendLog("warn", "wasend.item.fail", {
+        n: r.index, phone: item.phone, chars: item.text.length,
+        reason, mode: mode || "none", diag: diag || "(none)",
+      });
+    }
+    wasendPublish("running", { lastError: r.lastError || "" });
+
+    if (r.stopping) break;
+    if (i < r.items.length - 1) {
+      const gap = WASEND_MIN_GAP_MS + Math.floor(Math.random() * (WASEND_MAX_GAP_MS - WASEND_MIN_GAP_MS + 1));
+      wasendLog("debug", "wasend.gap", { ms: gap });
+      if (!(await wasendSleep(gap))) break;
+    }
+  }
+}
+
+async function wasendStart(queue) {
+  if (wasendRun) return { ok: false, error: "a run is already active" };
+  const checked = wasendValidateQueue(queue);
+  if (checked.error) {
+    wasendLog("warn", "wasend.start.rejected", { error: checked.error });
+    return { ok: false, error: checked.error };
+  }
+
+  wasendRun = {
+    tabId: null,
+    items: checked.items,
+    index: 0,
+    sent: 0,
+    failed: 0,
+    lastMode: "",
+    report: [], // [{ phone, mode, ok, reason }] — dumped once at finish
+    stopping: false,
+    stopReason: "",
+    lastError: "",
+  };
+  // Run separator: the ring outlives every run, so a multi-run export needs a
+  // visible boundary between them.
+  wasendLog("info", "wasend.run.separator", {
+    started: new Date().toISOString(),
+    total: checked.items.length,
+  });
+  wasendLog("action", "wasend.start", { total: checked.items.length });
+  wasendPublish("running");
+
+  // Fire and forget — the popup gets progress through storage, not this reply.
+  (async () => {
+    try {
+      await wasendRunQueue();
+    } catch (err) {
+      wasendRun.lastError = "error:" + ((err && err.message) || "unknown").slice(0, 60);
+      wasendLog("error", "wasend.run.error", { error: wasendRun.lastError });
+    } finally {
+      // Always finalize — never leave "running" dangling.
+      const stopped = wasendRun.stopping;
+      const final = wasendSnapshot(stopped ? "stopped" : "done", {
+        lastError: wasendRun.lastError || wasendRun.stopReason || "",
+      });
+      wasendLog("action", "wasend.finish", {
+        state: final.state, total: final.total, sent: final.sent, failed: final.failed,
+        reason: wasendRun.stopReason || "",
+      });
+      // One line per item, after the fact — which path each recipient actually
+      // went through, in a form that can be pasted back verbatim.
+      wasendLog("info", "wasend.run.report", { items: wasendRun.report });
+      wasendRun = null;
+      wasendWriteStatus(final);
+    }
+  })();
+
+  return { ok: true, total: checked.items.length };
+}
+
+function wasendStop(reason) {
+  if (!wasendRun) return { ok: false, error: "no run in progress" };
+  wasendRun.stopping = true;
+  wasendRun.stopReason = reason || "stopped";
+  wasendLog("action", "wasend.stop", { reason: wasendRun.stopReason, sent: wasendRun.sent, failed: wasendRun.failed });
+  return { ok: true };
+}
+
+// The user closing the dedicated tab is an abort signal.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (wasendRun && wasendRun.tabId === tabId) wasendStop("tab-closed");
+});
+
+// ── The content script's diagnostics channel ──
+// wasend.js fires its decision points here because the page console dies with
+// every navigation (and the URL fallback navigates). Fire-and-forget from the
+// page's side; strictly shape-validated on this side, and the payload is a
+// structural summary — counts, selector variant names, lengths, hashes.
+const WASEND_LOG_MAX_CHARS = 500;
+
+function wasendLogFromPage(msg, sender) {
+  if (typeof msg.nonce !== "string" || !msg.nonce || msg.nonce.length > 64) return;
+  if (typeof msg.event !== "string" || !msg.event || msg.event.length > 64) return;
+  if (msg.data != null && (typeof msg.data !== "object" || Array.isArray(msg.data))) return;
+  let data = "";
+  try {
+    data = JSON.stringify(msg.data || {}).slice(0, WASEND_LOG_MAX_CHARS);
+  } catch (_) {
+    data = "[unserializable]";
+  }
+  wasendLog("info", "wasend.cs→bg " + msg.event.slice(0, 64), {
+    tab: sender && sender.tab ? sender.tab.id : null,
+    run: msg.nonce.slice(0, 6),
+    data,
+  });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "wasend.log") {
+    // Page-originated (CLAUDE.md): validated, never re-dispatched anywhere.
+    if (!sender || sender.id !== chrome.runtime.id) return;
+    wasendLogFromPage(msg, sender);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === "wasend.start") {
+    if (!sender || sender.id !== chrome.runtime.id) return;
+    wasendStart(msg.queue)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, error: (err && err.message) || "unknown" }));
+    return true; // async sendResponse
+  }
+  if (msg.type === "wasend.stop") {
+    if (!sender || sender.id !== chrome.runtime.id) return;
+    sendResponse(wasendStop("user-stop"));
+    return true;
+  }
+  if (msg.type === "exportWasendLog") {
+    if (!sender || sender.id !== chrome.runtime.id) return;
+    wasendLogReady.then(() => {
+      sendResponse({ entries: wasendLogRing.slice(), cap: WASEND_LOG_CAP });
+    });
+    return true; // async sendResponse
+  }
+});
+
+// Boot fixup: if the service worker was killed mid-run the stored status is
+// stuck at "running" with no run behind it. Reconcile once on wake.
+(async () => {
+  try {
+    const d = await chrome.storage.local.get([WASEND_STATUS_KEY]);
+    const st = d[WASEND_STATUS_KEY];
+    if (!st || st.state !== "running") return;
+    if (wasendRun) return; // a fresh run started while we were reading
+    wasendLog("warn", "wasend.orphaned", { sent: st.sent, failed: st.failed, total: st.total });
+    wasendWriteStatus(Object.assign({}, st, {
+      state: "stopped",
+      lastError: "interrupted — the extension's background worker restarted",
+      ts: Date.now(),
+    }));
+  } catch (err) {
+    wasendLog("warn", "wasend.orphan.check.fail", { error: err && err.message });
+  }
+})();
+
+// ═══════════════════════════════════
 //  Install / upgrade hooks
 // ═══════════════════════════════════
 chrome.runtime.onInstalled.addListener(() => {
