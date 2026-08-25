@@ -24,7 +24,7 @@
       flex-shrink: 0;
     }
     .nav button {
-      width: calc(100% / 6);
+      width: 25%;
       padding: 9px 2px;
       background: none;
       border: none;
@@ -38,6 +38,34 @@
     .nav button:hover { color: #ccc; }
     .nav button:focus { outline: none; }
     .nav button.active {
+      color: #e94560;
+      border-bottom-color: #e94560;
+    }
+
+    /* ── Sub-nav (pages parked under "More…") ── */
+    .subnav {
+      display: none;
+      flex-wrap: wrap;
+      background: #16162c;
+      border-bottom: 1px solid #2a2a4a;
+      flex-shrink: 0;
+    }
+    .subnav.show { display: flex; }
+    .subnav button {
+      width: calc(100% / 5);
+      padding: 7px 2px;
+      background: none;
+      border: none;
+      color: #777;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .subnav button:hover { color: #bbb; }
+    .subnav button:focus { outline: none; }
+    .subnav button.active {
       color: #e94560;
       border-bottom-color: #e94560;
     }
@@ -791,20 +819,25 @@
 </head>
 <body>
 
-  <!-- Nav -->
+  <!-- Nav — only the pages in daily use live here; the rest are sub-tabs under "More…" -->
   <div class="nav">
     <button class="active" data-page="quick">🚀 Quick</button>
+    <button data-page="focus">🎯 Focus</button>
+    <button data-page="localai">🤖 AI</button>
+    <button id="moreBtn">➕ More…</button>
+  </div>
+
+  <!-- Sub-nav — revealed only while a "More…" page is open -->
+  <div class="subnav" id="subnav">
     <button data-page="localhost">💻 Local</button>
     <button data-page="cookies">🍪 Cookies</button>
     <button data-page="livecss">🎨 CSS</button>
     <button data-page="redirects">🔀 Redirects</button>
     <button data-page="jstoggle">⚡ JS</button>
     <button data-page="pip">🖼 PiP</button>
-    <button data-page="focus">🎯 Focus</button>
     <button data-page="jsonformat">{} JSON</button>
     <button data-page="darkmode">🌙 Dark</button>
     <button data-page="nocookie">🚫 GDPR</button>
-    <button data-page="localai">🤖 AI</button>
   </div>
 
   <!-- ═══ Quick Actions Page ═══ -->

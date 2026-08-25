@@ -15,13 +15,44 @@ SL.log.info("popup", "boot");
 // ═══════════════════════════════════
 //  Navigation
 // ═══════════════════════════════════
+// Pages that keep a slot in the top nav — the ones in daily use.
+const MAIN_PAGES = ["quick", "focus", "localai"];
+// Everything else is parked behind "More…" and reached through the sub-nav.
+const SUB_PAGES = [
+  "localhost", "cookies", "livecss", "redirects",
+  "jstoggle", "pip", "jsonformat", "darkmode", "nocookie",
+];
+const ALL_PAGES = [...MAIN_PAGES, ...SUB_PAGES];
+const DEFAULT_SUB_PAGE = "localhost";
+
+const moreBtn = document.getElementById("moreBtn");
+const subnavEl = document.getElementById("subnav");
+
+// Which sub-tab "More…" reopens. Kept in memory so the click is instant;
+// persisted to storage so it survives a popup close.
+let lastSubPage = DEFAULT_SUB_PAGE;
+
 function switchToPage(page) {
-  document.querySelectorAll(".nav button").forEach((b) => b.classList.remove("active"));
+  // `page` can come back from storage — only ever interpolate a known-good id.
+  if (!ALL_PAGES.includes(page)) return;
+  const btn = document.querySelector(`.nav button[data-page="${page}"], .subnav button[data-page="${page}"]`);
+  const pageEl = document.getElementById("page-" + page);
+  if (!btn || !pageEl) return;
+
+  document.querySelectorAll(".nav button, .subnav button").forEach((b) => b.classList.remove("active"));
   document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
-  const btn = document.querySelector(`.nav button[data-page="${page}"]`);
-  if (!btn) return;
   btn.classList.add("active");
-  document.getElementById("page-" + page).classList.add("active");
+  pageEl.classList.add("active");
+
+  // A sub-page keeps "More…" lit and its sub-nav open; a main page collapses it.
+  const isSub = SUB_PAGES.includes(page);
+  moreBtn.classList.toggle("active", isSub);
+  subnavEl.classList.toggle("show", isSub);
+  if (isSub) {
+    lastSubPage = page;
+    chrome.storage.local.set({ last_sub_tab: page });
+  }
+
   if (page === "quick") loadQuick();
   if (page === "cookies") loadCookies();
   if (page === "redirects") loadRedirects();
@@ -36,7 +67,7 @@ function switchToPage(page) {
   chrome.storage.local.set({ last_tab: page });
 }
 
-document.querySelectorAll(".nav button").forEach((btn) => {
+document.querySelectorAll(".nav button[data-page], .subnav button[data-page]").forEach((btn) => {
   btn.addEventListener("click", () => {
     log("nav", { to: btn.dataset.page });
     notify(btn.textContent.trim(), "info");
@@ -44,8 +75,16 @@ document.querySelectorAll(".nav button").forEach((btn) => {
   });
 });
 
+// "More…" has no page of its own — it opens the sub-nav on whichever sub-tab was last used.
+moreBtn.addEventListener("click", () => {
+  log("nav.more", { to: lastSubPage });
+  notify("More…", "info");
+  switchToPage(lastSubPage);
+});
+
 // Restore last open tab
-chrome.storage.local.get(["last_tab"], (data) => {
+chrome.storage.local.get(["last_tab", "last_sub_tab"], (data) => {
+  if (SUB_PAGES.includes(data.last_sub_tab)) lastSubPage = data.last_sub_tab;
   if (data.last_tab) switchToPage(data.last_tab);
   else loadQuick(); // Quick is the default visible tab on first run
 });
