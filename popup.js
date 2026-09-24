@@ -664,6 +664,7 @@ livecssClear.addEventListener("click", async () => {
 //   xunhook_enabled      (default ON)   → X sidebar xunhook.js
 //   nfe_x                (default OFF)  → X home timeline nfe.js
 //   nfe_linkedin         (default OFF)  → LinkedIn feed nfe.js
+//   liunhook_enabled     (default ON)   → LinkedIn Home dot liunhook.js
 //   nfe_facebook         (default OFF)  → Facebook feed nfe.js
 //   nfe_instagram        (default OFF)  → Instagram feed nfe.js
 //   nfe_reddit           (default OFF)  → Reddit feed nfe.js
@@ -699,6 +700,14 @@ const FOCUS_SITES = [
     defaultOn: false,
     msgType: "nfe_toggle",
     nfeSite: "linkedin",
+    urlPatterns: ["*://*.linkedin.com/*"],
+  },
+  {
+    elId: "focusLinkedinDot",
+    storageKey: "liunhook_enabled",
+    defaultOn: true,
+    msgType: "liunhook_toggle",
+    nfeSite: null,
     urlPatterns: ["*://*.linkedin.com/*"],
   },
   {

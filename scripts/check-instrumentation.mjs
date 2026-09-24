@@ -26,6 +26,7 @@ const FILES = [
   "nfe.js",
   "unhook.js",
   "xunhook.js",
+  "liunhook.js",
   "darkmode.js",
   "nocookie.js",
   "livecss.js",

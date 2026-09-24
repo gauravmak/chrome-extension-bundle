@@ -19,6 +19,11 @@
 
   const SELECTORS = {
     linkedin: [
+      // 2026 UI (hashed class names). The feed's first child is the
+      // "Start a post" box — keep it, hide the posts after it.
+      "[data-testid='mainFeed'] > :not(:first-child)",
+      "[data-view-name='news-module']",
+      // Classic UI
       "main .scaffold-finite-scroll",
       ".feed-shared-news-module",
       "[data-id='feed-update']",

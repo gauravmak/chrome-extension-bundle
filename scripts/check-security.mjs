@@ -27,7 +27,7 @@ const ROOT = process.env.CLAUDE_PROJECT_DIR || path.resolve(__dirname, "..");
 const FILES = [
   "popup.js", "popup.html",
   "background.js", "logger.js",
-  "nfe.js", "unhook.js", "xunhook.js",
+  "nfe.js", "unhook.js", "xunhook.js", "liunhook.js",
   "darkmode.js", "nocookie.js", "livecss.js", "jsonformat.js",
   "gmaps.js", "viewimage.js",
   "teams.js", "wasend.js",

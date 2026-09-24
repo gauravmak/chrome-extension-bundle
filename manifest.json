@@ -29,6 +29,10 @@
     "js": ["logger.js", "xunhook.js"],
     "run_at": "document_start"
   }, {
+    "matches": ["*://*.linkedin.com/*"],
+    "js": ["logger.js", "liunhook.js"],
+    "run_at": "document_start"
+  }, {
     "matches": [
       "*://*.linkedin.com/*",
       "*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*",

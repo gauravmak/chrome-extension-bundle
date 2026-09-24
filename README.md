@@ -13,7 +13,7 @@ A personal Chrome extension that bundles browser utilities, focus tools, and pag
 - **JSON Formatter** — Detects pure-JSON pages and pretty-prints them with syntax highlighting and collapsible sections.
 
 ### Focus
-- **Focus Mode** — Hide the feed and/or sidebar on YouTube, X/Twitter, LinkedIn, Facebook, and Reddit. Search, profiles, and direct links keep working.
+- **Focus Mode** — Hide the feed and/or sidebar on YouTube, X/Twitter, LinkedIn, Facebook, and Reddit, plus LinkedIn's red new-posts dot on the Home icon. Search, profiles, and direct links keep working.
 - **Bounce to Reading Material** — When enabled, opening YouTube's home page, the LinkedIn feed, or your own LinkedIn profile redirects you to the oldest bookmark in your "Reading Material" folder, with an on-page notice that the redirect happened.
 
 ### Page tools
