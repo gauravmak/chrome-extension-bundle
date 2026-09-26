@@ -20,7 +20,7 @@ const MAIN_PAGES = ["quick", "focus", "localai"];
 // Everything else is parked behind "More…" and reached through the sub-nav.
 const SUB_PAGES = [
   "localhost", "cookies", "livecss", "redirects",
-  "jstoggle", "pip", "jsonformat", "darkmode", "nocookie",
+  "jstoggle", "pip", "jsonformat", "darkmode", "nocookie", "calshift",
 ];
 const ALL_PAGES = [...MAIN_PAGES, ...SUB_PAGES];
 const DEFAULT_SUB_PAGE = "localhost";
@@ -64,6 +64,7 @@ function switchToPage(page) {
   if (page === "jsonformat") loadJsonFormat();
   if (page === "localhost") loadLocalhost();
   if (page === "localai") loadLocalAI();
+  if (page === "calshift") loadCalshift();
   chrome.storage.local.set({ last_tab: page });
 }
 
@@ -2588,4 +2589,416 @@ chrome.storage.local.get([WASEND_DRAFT_KEY, WASEND_STATUS_KEY], (d) => {
   if (typeof d[WASEND_DRAFT_KEY] === "string") wasendDraft.value = d[WASEND_DRAFT_KEY];
   wasendRefreshParse();
   wasendRenderStatus(d[WASEND_STATUS_KEY]);
+});
+
+// ═══════════════════════════════════
+//  Calendar reschedule — move one day's solo events to another day
+//
+//  This page is a thin renderer. The plan is built and applied in
+//  background.js (see the calshift section there for the safety rules); the
+//  popup only shows what would happen, collects the tick boxes, and sends the
+//  ids back. It deliberately holds no calendar state of its own — closing the
+//  popup mid-run is survivable because the driver is not in here.
+//
+//  Everything rendered below (event titles) comes from the Calendar API, so
+//  it is treated as untrusted: textContent only, never markup.
+// ═══════════════════════════════════
+const CALSHIFT_ARM_MS = 10000;
+
+const calPreviewBtn = document.getElementById("calPreview");
+const calApplyBtn = document.getElementById("calApply");
+const calUndoBtn = document.getElementById("calUndo");
+const calStatusEl = document.getElementById("calStatus");
+const calListEl = document.getElementById("calList");
+const calSkipWrap = document.getElementById("calSkipWrap");
+const calSkipList = document.getElementById("calSkipList");
+const calHeadEl = document.getElementById("calHead");
+const calPresetBtns = document.querySelectorAll("#page-calshift .cal-preset");
+const calFromEl = document.getElementById("calFrom");
+const calToEl = document.getElementById("calTo");
+// The static intro, restored whenever there is no plan to describe.
+const calHeadDefault = Array.from(calHeadEl.childNodes, (n) => n.cloneNode(true));
+
+let calPlan = null;             // last plan from the background
+let calChecked = new Set();     // ids the user left ticked
+let calArmTimer = null;         // non-null while "Confirm" is armed
+
+function calSetStatus(msg, kind) {
+  calStatusEl.textContent = msg || "";
+  calStatusEl.className = "cal-status" + (kind ? " " + kind : "");
+}
+
+// One round trip at a time: the shortcuts, Preview and a running move all
+// replace calPlan.
+function calSetBusy(busy) {
+  calPreviewBtn.disabled = busy;
+  for (const b of calPresetBtns) b.disabled = busy;
+}
+
+// The browser's local date, offset by `days`. Only seeds the date pickers —
+// the shortcuts are resolved by the background in the calendar's own zone,
+// which is what "today" should mean there.
+function calLocalDate(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+    + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+// "2026-09-25 (yesterday)" when the date sits next to the calendar's today.
+function calDayLabel(date, today) {
+  const diff = Math.round((Date.parse(date + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+  const word = diff === -1 ? "yesterday" : diff === 0 ? "today" : diff === 1 ? "tomorrow" : "";
+  return word ? date + " (" + word + ")" : date;
+}
+
+function calDisarm() {
+  if (calArmTimer) { clearTimeout(calArmTimer); calArmTimer = null; }
+  calApplyBtn.classList.remove("armed");
+  calSyncApplyBtn();
+}
+
+function calSyncApplyBtn() {
+  const n = calChecked.size;
+  if (!calApplyBtn.classList.contains("armed")) {
+    calApplyBtn.textContent = "Move " + n + " event" + (n === 1 ? "" : "s");
+  }
+  calApplyBtn.disabled = n === 0;
+}
+
+function calEmpty(text) {
+  const d = document.createElement("div");
+  d.className = "cal-empty";
+  d.textContent = text;
+  return d;
+}
+
+function calTag(text, warn) {
+  const t = document.createElement("span");
+  t.className = "cal-tag" + (warn ? " warn" : "");
+  t.textContent = text;
+  return t;
+}
+
+function calRenderMoveRow(item) {
+  const row = document.createElement("div");
+  row.className = "cal-row";
+
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = calChecked.has(item.id);
+  box.addEventListener("change", () => {
+    // no-notify: tick box is pure selection state — the move itself notifies
+    if (box.checked) calChecked.add(item.id); else calChecked.delete(item.id);
+    log("calshift.toggle", { id: item.id, checked: box.checked, selected: calChecked.size });
+    calDisarm();
+  });
+
+  const body = document.createElement("div");
+  body.className = "cal-body";
+
+  const title = document.createElement("div");
+  title.className = "cal-title";
+  title.textContent = item.summary;
+  if (item.recurring) title.appendChild(calTag("recurring — this instance only"));
+  if (item.conflicts && item.conflicts.length) {
+    title.appendChild(calTag("clashes with " + item.conflicts.join(", "), true));
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "cal-meta";
+  const arrow = document.createElement("span");
+  arrow.className = "arrow";
+  arrow.textContent = " → ";
+  meta.appendChild(document.createTextNode(calPlan.from + " " + item.when));
+  meta.appendChild(arrow);
+  meta.appendChild(document.createTextNode(calPlan.to + " " + item.when));
+
+  body.appendChild(title);
+  body.appendChild(meta);
+  row.appendChild(box);
+  row.appendChild(body);
+  return row;
+}
+
+function calRenderSkipRow(item) {
+  const row = document.createElement("div");
+  row.className = "cal-row skip";
+  const body = document.createElement("div");
+  body.className = "cal-body";
+
+  const title = document.createElement("div");
+  title.className = "cal-title";
+  title.textContent = item.summary;
+
+  const meta = document.createElement("div");
+  meta.className = "cal-meta";
+  meta.textContent = (item.when ? item.when + " — " : "") + item.reason;
+
+  body.appendChild(title);
+  body.appendChild(meta);
+  row.appendChild(body);
+  return row;
+}
+
+function calRenderPlan() {
+  calListEl.replaceChildren();
+  calSkipList.replaceChildren();
+
+  if (!calPlan) {
+    calHeadEl.replaceChildren(...calHeadDefault.map((n) => n.cloneNode(true)));
+    calListEl.appendChild(calEmpty("Pick a shortcut, or two dates and Preview."));
+    calSkipWrap.style.display = "none";
+    calSyncApplyBtn();
+    return;
+  }
+
+  calHeadEl.textContent =
+    "Moving " + calDayLabel(calPlan.from, calPlan.today)
+    + " → " + calDayLabel(calPlan.to, calPlan.today)
+    + " (" + calPlan.calendarTz + "). "
+    + "Solo events only — anything with another guest or a room is left alone, "
+    + "so nothing ever mails anyone.";
+
+  if (calPlan.move.length === 0) {
+    calListEl.appendChild(calEmpty("Nothing on " + calPlan.from + " can be moved."));
+  } else {
+    for (const item of calPlan.move) calListEl.appendChild(calRenderMoveRow(item));
+  }
+
+  if (calPlan.skip.length) {
+    calSkipWrap.style.display = "";
+    for (const item of calPlan.skip) calSkipList.appendChild(calRenderSkipRow(item));
+  } else {
+    calSkipWrap.style.display = "none";
+  }
+
+  calSyncApplyBtn();
+}
+
+// Undo availability and any status left behind by a run the popup didn't see.
+function calRefreshState() {
+  chrome.runtime.sendMessage({ type: "calshift.state" }, (res) => {
+    if (chrome.runtime.lastError) {
+      logWarn("calshift.state.fail", { error: chrome.runtime.lastError.message });
+      return;
+    }
+    if (!res || res.ok !== true) return;
+    calUndoBtn.disabled = !res.undoCount;
+    calUndoBtn.textContent = res.undoCount ? "Undo " + res.undoCount : "Undo";
+    const st = res.status;
+    if (st && st.state === "running") {
+      calSetStatus("Run in progress — moved " + st.moved + " of " + st.total + "…", "run");
+    }
+  });
+}
+
+// chrome.identity is undefined when the `identity` permission was added to
+// the manifest after this popup's chrome references were handed out — i.e.
+// right after adding the permission, when the extension was reloaded but the
+// popup was never closed. Say so here rather than letting the first Preview
+// fail with a vaguer message from the background.
+function calIdentityReady() {
+  if (chrome.identity && chrome.identity.getAuthToken) return true;
+  logError("calshift.identityMissing");
+  calSetStatus("Identity permission missing — reload at chrome://extensions, "
+    + "then close and reopen this popup", "err");
+  calSetBusy(true);
+  calApplyBtn.disabled = true;
+  calUndoBtn.disabled = true;
+  return false;
+}
+
+function loadCalshift() {
+  logInfo("calshift.load");
+  if (!calIdentityReady()) return;
+  if (!calFromEl.value) calFromEl.value = calLocalDate(0);
+  if (!calToEl.value) calToEl.value = calLocalDate(1);
+  calRefreshState();
+  calRenderPlan();
+}
+
+// Shared by the shortcuts and the custom Preview. `range` is { preset } or
+// { from, to }; the background checks it again either way.
+function calRunPreview(range) {
+  calDisarm();
+  calSetStatus("Reading your calendar…", "run");
+  calSetBusy(true);
+
+  chrome.runtime.sendMessage(Object.assign({ type: "calshift.preview" }, range), (res) => {
+    calSetBusy(false);
+    if (chrome.runtime.lastError) {
+      logError("calshift.preview.fail", { error: chrome.runtime.lastError.message });
+      calSetStatus("Could not reach the extension background", "err");
+      notifyErr("Could not reach the extension background");
+      return;
+    }
+    if (!res || res.ok !== true) {
+      const err = (res && res.error) || "failed";
+      logWarn("calshift.preview.rejected", { error: err });
+      calSetStatus(err, "err");
+      notifyErr("Preview failed: " + err);
+      return;
+    }
+    calPlan = res;
+    // Show the dates a shortcut resolved to, so it can be tweaked into a
+    // custom range. Setting .value doesn't fire "change", so the plan stays.
+    calFromEl.value = res.from;
+    calToEl.value = res.to;
+    // Everything movable starts ticked — the user unticks exceptions.
+    calChecked = new Set(res.move.map((m) => m.id));
+    calRenderPlan();
+    const clashes = res.move.filter((m) => m.conflicts && m.conflicts.length).length;
+    logInfo("calshift.preview.ok", { from: res.from, to: res.to, move: res.move.length, skip: res.skip.length, clashes });
+    calSetStatus(
+      res.move.length + " movable, " + res.skip.length + " left alone"
+      + (clashes ? ", " + clashes + " would clash" : ""),
+      res.move.length ? "ok" : ""
+    );
+    notify(res.move.length + " event(s) can move", res.move.length ? "ok" : "info");
+  });
+}
+
+for (const btn of calPresetBtns) {
+  btn.addEventListener("click", () => {
+    log("calshift.preset.click", { preset: btn.dataset.preset });
+    notify("Reading your calendar…", "info");
+    calRunPreview({ preset: btn.dataset.preset });
+  });
+}
+
+calPreviewBtn.addEventListener("click", () => {
+  const from = calFromEl.value;
+  const to = calToEl.value;
+  log("calshift.preview.click", { from, to });
+  if (!from || !to || from === to) {
+    const err = !from || !to ? "Pick both dates" : "From and To are the same day";
+    calSetStatus(err, "err");
+    notifyErr(err);
+    return;
+  }
+  notify("Reading your calendar…", "info");
+  calRunPreview({ from, to });
+});
+
+// A plan belongs to the dates it was built for. Editing either date retires
+// it, so Move can't act on a different day than the pickers now show.
+for (const el of [calFromEl, calToEl]) {
+  el.addEventListener("change", () => {
+    // no-notify: picking a date is selection state — Preview notifies
+    log("calshift.range.change", { from: calFromEl.value, to: calToEl.value });
+    if (!calPlan) return;
+    calPlan = null;
+    calChecked = new Set();
+    calDisarm();
+    calRenderPlan();
+    calSetStatus("Dates changed — Preview again", "");
+  });
+}
+
+calApplyBtn.addEventListener("click", () => {
+  const ids = calPlan ? calPlan.move.filter((m) => calChecked.has(m.id)) : [];
+  if (!ids.length) {
+    log("calshift.apply.empty");
+    calSetStatus("Nothing ticked", "err");
+    notifyErr("Nothing ticked");
+    calDisarm();
+    return;
+  }
+
+  // First click arms; second click within 10s actually moves anything.
+  if (!calArmTimer) {
+    calApplyBtn.textContent = "Confirm: move " + ids.length;
+    calApplyBtn.classList.add("armed");
+    calSetStatus("Will move " + ids.length + " event(s) from " + calPlan.from + " to " + calPlan.to
+      + " — click again within 10s", "err");
+    calArmTimer = setTimeout(() => {
+      calArmTimer = null;
+      calDisarm();
+      calSetStatus("Confirmation expired", "");
+      logInfo("calshift.arm.expired");
+    }, CALSHIFT_ARM_MS);
+    log("calshift.arm", { count: ids.length });
+    notify("Click again to confirm " + ids.length + " move(s)", "info");
+    return;
+  }
+
+  calDisarm();
+  // The dates this plan was built for. Apply re-plans against exactly these,
+  // never a shortcut, so it moves the day that was previewed.
+  const { from, to } = calPlan;
+  log("calshift.apply.start", { count: ids.length, from, to });
+  notify("Moving " + ids.length + " event(s)…", "info");
+  calSetStatus("Moving…", "run");
+  calApplyBtn.disabled = true;
+  calSetBusy(true);
+
+  const items = ids.map((m) => ({ id: m.id, fromIso: m.fromIso, summary: m.summary }));
+  chrome.runtime.sendMessage({ type: "calshift.apply", items, from, to }, (res) => {
+    calApplyBtn.disabled = false;
+    calSetBusy(false);
+    if (chrome.runtime.lastError) {
+      logError("calshift.apply.fail", { error: chrome.runtime.lastError.message });
+      calSetStatus("Could not reach the extension background", "err");
+      notifyErr("Could not reach the extension background");
+      return;
+    }
+    if (!res || res.ok !== true) {
+      const err = (res && res.error) || "failed";
+      logWarn("calshift.apply.rejected", { error: err });
+      calSetStatus(err, "err");
+      notifyErr("Move failed: " + err);
+      return;
+    }
+    const movedCount = res.moved.length;
+    const refused = res.refused || [];
+    logInfo("calshift.apply.done", { moved: movedCount, refused: refused.length });
+    let msg = "Moved " + movedCount + " to " + to;
+    if (refused.length) msg += " — " + refused.length + " left behind: " + refused[0].reason;
+    calSetStatus(msg, refused.length ? "err" : "ok");
+    notify(msg, movedCount ? "ok" : "err");
+    // The plan describes a day that no longer exists — force a fresh preview.
+    calPlan = null;
+    calChecked = new Set();
+    calRenderPlan();
+    calRefreshState();
+  });
+});
+
+calUndoBtn.addEventListener("click", () => {
+  log("calshift.undo.click");
+  calDisarm();
+  calSetStatus("Putting them back…", "run");
+  notify("Undoing the last move…", "info");
+  calUndoBtn.disabled = true;
+  calSetBusy(true);
+
+  chrome.runtime.sendMessage({ type: "calshift.undo" }, (res) => {
+    calSetBusy(false);
+    if (chrome.runtime.lastError) {
+      logError("calshift.undo.fail", { error: chrome.runtime.lastError.message });
+      calSetStatus("Could not reach the extension background", "err");
+      notifyErr("Could not reach the extension background");
+      calUndoBtn.disabled = false;
+      return;
+    }
+    if (!res || res.ok !== true) {
+      const err = (res && res.error) || "failed";
+      logWarn("calshift.undo.rejected", { error: err });
+      calSetStatus(err, "err");
+      notifyErr("Undo failed: " + err);
+      calUndoBtn.disabled = false;
+      return;
+    }
+    const refused = res.refused || [];
+    logInfo("calshift.undo.done", { restored: res.restored.length, refused: refused.length });
+    let msg = "Put " + res.restored.length + " back" + (res.from ? " on " + res.from : "");
+    if (refused.length) msg += " — " + refused.length + " skipped: " + refused[0].reason;
+    calSetStatus(msg, refused.length ? "err" : "ok");
+    notify(msg, res.restored.length ? "ok" : "err");
+    calPlan = null;
+    calChecked = new Set();
+    calRenderPlan();
+    calRefreshState();
+  });
 });

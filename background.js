@@ -1343,3 +1343,602 @@ chrome.runtime.onInstalled.addListener(() => {
   // Also drop the orphan session-storage key from the old Tab Cleaner tabActivity.
   chrome.storage.session.remove(["sl_tabActivity"]).catch(() => {});
 });
+
+// ═══════════════════════════════════
+//  calshift — move one day's events to another day
+//
+//  Google Calendar API (OAuth via chrome.identity), NOT DOM-driving. The
+//  popup never touches the API: it asks for a plan, renders it, and asks for
+//  the plan to be applied. The driver lives here because a bulk mutation must
+//  survive the popup closing mid-run — same reason wasend's driver does.
+//
+//  THE RULES, in the order they matter:
+//
+//  1. SOLO EVENTS ONLY. Anything with another attendee — a person OR a room
+//     resource — is never touched. Moving a meeting mails everyone on it, and
+//     this feature is not allowed to be outward-facing. Every PATCH also
+//     carries sendUpdates=none so that even a classification bug cannot send
+//     mail. Belt and braces, deliberately.
+//
+//  2. PREVIEW THEN APPLY, and apply re-derives the plan from scratch. The
+//     popup sends back the event ids plus the start instant it showed the
+//     user. If the freshly-fetched event no longer starts at that instant, or
+//     has grown a guest since, we skip it. A calendar that changed under the
+//     preview fails safe instead of moving the wrong thing — the wasend gate.
+//
+//  3. EVERY MOVE IS UNDOABLE. The previous start/end of each moved event is
+//     stored before the run finishes; undo verifies the event is still where
+//     we put it before restoring. One level, the last run only.
+//
+//  Days: the popup sends a shortcut ("today-tomorrow", "yesterday-today") or
+//  an explicit from/to pair. Shortcuts are resolved HERE, in the calendar's
+//  zone — "today" means today on the calendar's grid, which is not the
+//  browser's today when the two zones straddle midnight. The plan hands back
+//  absolute dates and apply is sent those, so a run that crosses midnight
+//  between preview and apply still moves the day that was previewed.
+//
+//  Timezones: wall clock is preserved, not the instant. 10:00 on the source
+//  day stays 10:00 on the target day even when a DST transition sits between
+//  them — so we read each event's wall clock in its own timeZone, add the day
+//  delta to the DATE part, and send it back with an explicit timeZone and no
+//  offset, letting the API resolve it. Adding N×24h would silently shift an
+//  hour twice a year.
+// ═══════════════════════════════════
+const CALSHIFT_API = "https://www.googleapis.com/calendar/v3";
+const CALSHIFT_SCOPES = ["https://www.googleapis.com/auth/calendar.events"];
+const CALSHIFT_UNDO_KEY = "calshift_undo";
+const CALSHIFT_STATUS_KEY = "calshift_status";
+
+// The list window is deliberately sloppy — wide enough to contain the whole
+// of one day in any timezone the calendar might be in (UTC−12 … UTC+14).
+// Exact day boundaries are decided client-side by comparing each event's date
+// IN THE CALENDAR'S tz, which is the same thing as "what appears on that
+// day's grid". That avoids building RFC3339 bounds with a computed UTC offset.
+const CALSHIFT_DAY_MS = 24 * 60 * 60 * 1000;
+const CALSHIFT_WINDOW_PAD_MS = 36 * 60 * 60 * 1000;
+
+// Shortcut → [from, to] as day offsets from the calendar's today.
+const CALSHIFT_PRESETS = new Map([
+  ["today-tomorrow", [0, 1]],
+  ["yesterday-today", [-1, 0]],
+]);
+
+// Event types Google owns and will not let us move.
+const CALSHIFT_LOCKED_TYPES = ["birthday", "fromGmail", "workingLocation"];
+
+function calshiftLog(level, action, data) {
+  SL.log[level]("calshift", action, data);
+}
+
+// ── Auth ───────────────────────────────────────────────────────────
+// getAuthToken's callback has returned a bare string historically and an
+// object in newer Chrome. Accept both rather than pinning a shape.
+function calshiftTokenOf(result) {
+  if (!result) return "";
+  if (typeof result === "string") return result;
+  return result.token || "";
+}
+
+function calshiftToken(interactive) {
+  return new Promise((resolve, reject) => {
+    if (!chrome.identity || !chrome.identity.getAuthToken) {
+      reject(new Error("identity permission missing — reload at chrome://extensions"));
+      return;
+    }
+    // Fail loudly on the shipped placeholder. Without this the user gets
+    // Chrome's opaque "OAuth2 request failed" and no idea what to fix.
+    const oauth = chrome.runtime.getManifest().oauth2;
+    if (!oauth || !oauth.client_id || oauth.client_id.startsWith("REPLACE_ME")) {
+      reject(new Error("no OAuth client configured — see README, 'Calendar reschedule setup'"));
+      return;
+    }
+    chrome.identity.getAuthToken({ interactive: !!interactive, scopes: CALSHIFT_SCOPES }, (result) => {
+      const err = chrome.runtime.lastError;
+      const token = calshiftTokenOf(result);
+      if (err || !token) {
+        reject(new Error((err && err.message) || "no token returned"));
+        return;
+      }
+      resolve(token);
+    });
+  });
+}
+
+function calshiftDropToken(token) {
+  return new Promise((resolve) => {
+    if (!token || !chrome.identity || !chrome.identity.removeCachedAuthToken) { resolve(); return; }
+    chrome.identity.removeCachedAuthToken({ token }, () => resolve());
+  });
+}
+
+// One API call. A 401 means the cached token went stale — drop it and retry
+// once with a fresh one. Any other non-2xx throws with the API's own message,
+// which is far more useful than a bare status code.
+async function calshiftApi(path, init, interactive) {
+  const build = (token) => Object.assign({}, init, {
+    headers: Object.assign({}, (init && init.headers) || {}, {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+    }),
+  });
+
+  let token = await calshiftToken(interactive);
+  let res = await fetch(CALSHIFT_API + path, build(token));
+
+  if (res.status === 401) {
+    calshiftLog("warn", "auth.stale", { path });
+    await calshiftDropToken(token);
+    token = await calshiftToken(true);
+    res = await fetch(CALSHIFT_API + path, build(token));
+  }
+
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = (body && body.error && body.error.message) || "";
+    } catch (_) { /* non-JSON error body — status alone will have to do */ }
+    throw new Error("Calendar API " + res.status + (detail ? ": " + detail : ""));
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+// ── Date helpers ───────────────────────────────────────────────────
+// All arithmetic is on "YYYY-MM-DD" strings via UTC so the service worker's
+// own timezone never enters into it.
+function calshiftAddDays(dateStr, days) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr));
+  if (!m) throw new Error("unparsable date: " + dateStr);
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// A real calendar date in "YYYY-MM-DD" form. The round trip rejects
+// impossible ones like 2026-02-30, which Date.UTC would quietly roll over.
+function calshiftIsDate(s) {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  return calshiftAddDays(s, 0) === s;
+}
+
+function calshiftDaysBetween(from, to) {
+  return Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / CALSHIFT_DAY_MS);
+}
+
+// The wall-clock date+time an instant shows as in a given IANA zone.
+// h23 rather than hour12:false — the latter can render midnight as "24".
+function calshiftWallClock(instant, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(instant);
+  const get = (type) => {
+    const p = parts.find((x) => x.type === type);
+    return p ? p.value : "00";
+  };
+  return {
+    date: get("year") + "-" + get("month") + "-" + get("day"),
+    time: get("hour") + ":" + get("minute") + ":" + get("second"),
+  };
+}
+
+function calshiftDateIn(instant, timeZone) {
+  return calshiftWallClock(instant, timeZone).date;
+}
+
+function calshiftTimeLabel(instant, timeZone) {
+  return calshiftWallClock(instant, timeZone).time.slice(0, 5);
+}
+
+// ── Classification ─────────────────────────────────────────────────
+// A room resource counts as a guest. Booking a shared room is outward-facing
+// even though nobody gets mailed, so it falls under rule 1 like a person does.
+function calshiftIsSolo(ev) {
+  const attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
+  if (attendees.length === 0) return true;
+  return attendees.length === 1 && attendees[0].self === true;
+}
+
+function calshiftCanEdit(ev) {
+  if (ev.organizer && ev.organizer.self === true) return true;
+  if (ev.creator && ev.creator.self === true) return true;
+  return false;
+}
+
+// Why this event is not movable, or "" if it is.
+function calshiftSkipReason(ev) {
+  if (ev.status === "cancelled") return "cancelled";
+  if (CALSHIFT_LOCKED_TYPES.includes(ev.eventType)) return "read-only (" + ev.eventType + ")";
+  if (!calshiftIsSolo(ev)) return "has guests";
+  if (!calshiftCanEdit(ev)) return "not yours to edit";
+  if (!ev.start || (!ev.start.dateTime && !ev.start.date)) return "no start time";
+  if (!ev.end || (!ev.end.dateTime && !ev.end.date)) return "no end time";
+  return "";
+}
+
+// An event's start/end moved by `days` whole days (negative = earlier), ready
+// to PATCH. Undo is the same call with the sign flipped.
+function calshiftShiftOf(ev, calendarTz, days) {
+  if (ev.start.date) {
+    // All-day. end.date is exclusive, so both ends shift by the same amount.
+    return {
+      allDay: true,
+      start: { date: calshiftAddDays(ev.start.date, days) },
+      end: { date: calshiftAddDays(ev.end.date, days) },
+    };
+  }
+  // Timed. Read the wall clock in the event's OWN zone — the list response
+  // renders dateTime in the calendar's zone, which is not necessarily the
+  // same one, so the offset in the returned string can't be trusted here.
+  const startTz = ev.start.timeZone || calendarTz;
+  const endTz = ev.end.timeZone || calendarTz;
+  const startWall = calshiftWallClock(new Date(ev.start.dateTime), startTz);
+  const endWall = calshiftWallClock(new Date(ev.end.dateTime), endTz);
+  return {
+    allDay: false,
+    start: {
+      dateTime: calshiftAddDays(startWall.date, days) + "T" + startWall.time,
+      timeZone: startTz,
+    },
+    end: {
+      dateTime: calshiftAddDays(endWall.date, days) + "T" + endWall.time,
+      timeZone: endTz,
+    },
+  };
+}
+
+// ── Planning ───────────────────────────────────────────────────────
+// The zone is read off an events.list response, which carries the calendar's
+// timeZone at the top level. NOT GET /calendars/primary: that endpoint needs
+// a calendar-level scope (calendar / calendar.readonly) that the
+// calendar.events grant doesn't include, so the API answers 403 "Request had
+// insufficient authentication scopes". Stay inside the events collection.
+async function calshiftCalendarTz() {
+  const data = await calshiftApi("/calendars/primary/events?maxResults=1&fields=timeZone", { method: "GET" }, true);
+  return (data && data.timeZone) || "UTC";
+}
+
+// Everything that could be on `day`'s grid, plus slop either side.
+async function calshiftListDay(day) {
+  const dayStart = Date.parse(day + "T00:00:00Z");
+  const params = new URLSearchParams({
+    timeMin: new Date(dayStart - CALSHIFT_WINDOW_PAD_MS).toISOString(),
+    timeMax: new Date(dayStart + CALSHIFT_DAY_MS + CALSHIFT_WINDOW_PAD_MS).toISOString(),
+    singleEvents: "true",       // expand recurrences — we move one instance
+    showDeleted: "false",
+    maxResults: "250",
+    orderBy: "startTime",
+  });
+  const data = await calshiftApi("/calendars/primary/events?" + params.toString(), { method: "GET" }, true);
+  // One page only. 250 events in a four-day window would be a strange
+  // calendar, but leave a trace rather than plan silently on a partial day.
+  if (data && data.nextPageToken) calshiftLog("warn", "list.truncated", { day });
+  return (data && data.items) || [];
+}
+
+// Message shape for preview/apply: a known shortcut, or two real, different
+// dates. Runs before any API call. Shortcuts resolve later, once the
+// calendar's zone — and so its today — is known.
+function calshiftCheckRange(range) {
+  if (range.preset != null) {
+    if (!CALSHIFT_PRESETS.has(range.preset)) throw new Error("unknown shortcut");
+    return;
+  }
+  if (!calshiftIsDate(range.from) || !calshiftIsDate(range.to)) throw new Error("pick a from and a to date");
+  if (range.from === range.to) throw new Error("from and to are the same day");
+}
+
+function calshiftResolveRange(range, today) {
+  if (range.preset != null) {
+    const [fromOffset, toOffset] = CALSHIFT_PRESETS.get(range.preset);
+    return { from: calshiftAddDays(today, fromOffset), to: calshiftAddDays(today, toOffset) };
+  }
+  return { from: range.from, to: range.to };
+}
+
+// Absolute instants for an event, used for ordering and overlap tests.
+function calshiftSpan(ev) {
+  const startRaw = ev.start.dateTime || ev.start.date;
+  const endRaw = ev.end.dateTime || ev.end.date;
+  return { start: new Date(startRaw).getTime(), end: new Date(endRaw).getTime() };
+}
+
+function calshiftLabel(ev, calendarTz) {
+  if (ev.start.date) return "all day";
+  return calshiftTimeLabel(new Date(ev.start.dateTime), calendarTz)
+    + "–" + calshiftTimeLabel(new Date(ev.end.dateTime), calendarTz);
+}
+
+// Builds the whole plan: what moves from `from` to `to`, what doesn't and
+// why, and which moves land on top of something already sitting on `to`.
+// `range` is { preset } or { from, to }.
+async function calshiftPlan(range) {
+  calshiftCheckRange(range);
+  const calendarTz = await calshiftCalendarTz();
+  const today = calshiftDateIn(new Date(), calendarTz);
+  const { from, to } = calshiftResolveRange(range, today);
+  const days = calshiftDaysBetween(from, to);
+  const [fromItems, toItems] = await Promise.all([calshiftListDay(from), calshiftListDay(to)]);
+
+  const onDay = (ev, day) => {
+    if (ev.start && ev.start.date) {
+      // All-day events span [start.date, end.date). A multi-day block counts
+      // as being on every day it covers.
+      const endExclusive = (ev.end && ev.end.date) || calshiftAddDays(ev.start.date, 1);
+      return ev.start.date <= day && day < endExclusive;
+    }
+    if (!ev.start || !ev.start.dateTime) return false;
+    return calshiftDateIn(new Date(ev.start.dateTime), calendarTz) === day;
+  };
+
+  const sources = fromItems.filter((ev) => onDay(ev, from));
+  const targets = toItems.filter((ev) => onDay(ev, to));
+
+  const move = [];
+  const skip = [];
+
+  for (const ev of sources) {
+    const reason = calshiftSkipReason(ev);
+    const summary = ev.summary || "(no title)";
+    if (reason) {
+      skip.push({ id: ev.id, summary, reason, when: ev.start ? calshiftLabel(ev, calendarTz) : "" });
+      continue;
+    }
+    const shift = calshiftShiftOf(ev, calendarTz, days);
+    const span = calshiftSpan(ev);
+    move.push({
+      id: ev.id,
+      summary,
+      allDay: shift.allDay,
+      recurring: !!ev.recurringEventId,
+      // The instant the preview is built on. Apply refuses to move an event
+      // whose start no longer matches this — see rule 2.
+      fromIso: ev.start.dateTime || ev.start.date,
+      when: calshiftLabel(ev, calendarTz),
+      to: shift,
+      _span: span,
+      conflicts: [],
+    });
+  }
+
+  // Conflict flagging only — nothing is skipped for colliding. The landing
+  // instant is approximated as the current one + days × 24h, which is off by
+  // an hour when a DST change sits between the two days. That slop is fine
+  // for a warning label; the PATCH itself uses the exact wall-clock path above.
+  const movingIds = new Set(move.map((m) => m.id));
+  for (const m of move) {
+    if (m.allDay) continue; // an all-day block doesn't "collide" with a meeting
+    const newStart = m._span.start + days * CALSHIFT_DAY_MS;
+    const newEnd = m._span.end + days * CALSHIFT_DAY_MS;
+    for (const other of targets) {
+      if (movingIds.has(other.id)) continue;
+      if (other.start && other.start.date) continue;
+      if (other.status === "cancelled") continue;
+      const os = calshiftSpan(other);
+      if (newStart < os.end && os.start < newEnd) {
+        m.conflicts.push(other.summary || "(no title)");
+      }
+    }
+  }
+
+  for (const m of move) delete m._span;
+
+  calshiftLog("info", "plan.built", {
+    calendarTz, from, to, days,
+    move: move.length, skip: skip.length,
+    conflicts: move.filter((m) => m.conflicts.length).length,
+  });
+
+  return { ok: true, calendarTz, today, from, to, days, move, skip };
+}
+
+// ── Status ─────────────────────────────────────────────────────────
+function calshiftWriteStatus(status) {
+  return chrome.storage.local.set({ [CALSHIFT_STATUS_KEY]: status }).catch((err) => {
+    calshiftLog("warn", "status.persist.fail", { error: err.message });
+  });
+}
+
+// ── Apply ──────────────────────────────────────────────────────────
+// `requested` is [{ id, fromIso }] straight from the rendered preview, and
+// `range` the absolute { from, to } that preview resolved to. We re-plan from
+// scratch and only move an event that the FRESH plan still says is movable at
+// the same start instant.
+async function calshiftApply(requested, range) {
+  if (!Array.isArray(requested) || requested.length === 0) {
+    throw new Error("nothing selected");
+  }
+
+  const fresh = await calshiftPlan(range);
+  const byId = new Map(fresh.move.map((m) => [m.id, m]));
+
+  const moved = [];
+  const refused = [];
+
+  await calshiftWriteStatus({
+    state: "running", moved: 0, failed: 0, total: requested.length, at: Date.now(), lastError: "",
+  });
+
+  for (const req of requested) {
+    const id = req && req.id;
+    const plan = id ? byId.get(id) : null;
+
+    if (!plan) {
+      refused.push({ id, summary: (req && req.summary) || id, reason: "no longer movable" });
+      calshiftLog("warn", "apply.refused", { id, reason: "not-in-fresh-plan" });
+      continue;
+    }
+    if (plan.fromIso !== req.fromIso) {
+      refused.push({ id, summary: plan.summary, reason: "changed since preview" });
+      calshiftLog("warn", "apply.refused", { id, reason: "start-moved", was: req.fromIso, now: plan.fromIso });
+      continue;
+    }
+
+    try {
+      // sendUpdates=none is redundant for a solo event and deliberately sent
+      // anyway: if classification is ever wrong, the blast radius stays zero.
+      const updated = await calshiftApi(
+        "/calendars/primary/events/" + encodeURIComponent(id) + "?sendUpdates=none",
+        { method: "PATCH", body: JSON.stringify({ start: plan.to.start, end: plan.to.end }) },
+        false
+      );
+      moved.push({
+        id,
+        summary: plan.summary,
+        prevStart: plan.fromIso,
+        // Where the API says it landed, not where we asked it to land. We send
+        // an offset-less wall clock ("2026-09-13T10:00:00") and the response
+        // comes back canonicalised with an offset; undo compares this against
+        // a later GET, so it has to be the API's own spelling. Storing the sent
+        // string made undo refuse everything whenever the browser's timezone
+        // differed from the event's — an offset-less string parses in the
+        // service worker's zone.
+        landedStart: (updated && updated.start && (updated.start.dateTime || updated.start.date)) || "",
+      });
+      calshiftLog("info", "apply.moved", { id, allDay: plan.allDay });
+    } catch (err) {
+      refused.push({ id, summary: plan.summary, reason: err.message });
+      calshiftLog("error", "apply.fail", { id, error: err.message });
+    }
+
+    await calshiftWriteStatus({
+      state: "running", moved: moved.length, failed: refused.length,
+      total: requested.length, at: Date.now(), lastError: "",
+    });
+  }
+
+  // The undo record has to describe the events we actually touched, and has
+  // to carry enough to verify they're still where we left them.
+  if (moved.length) {
+    const undo = {
+      at: Date.now(),
+      from: fresh.from,
+      days: fresh.days,
+      items: moved.map((m) => ({
+        id: m.id,
+        summary: m.summary,
+        prevStart: m.prevStart,
+        newStart: m.landedStart,
+      })),
+    };
+    await chrome.storage.local.set({ [CALSHIFT_UNDO_KEY]: undo });
+  }
+
+  await calshiftWriteStatus({
+    state: refused.length && !moved.length ? "error" : "done",
+    moved: moved.length, failed: refused.length, total: requested.length,
+    at: Date.now(), lastError: refused.length ? refused[0].reason : "",
+  });
+
+  calshiftLog("info", "apply.done", { moved: moved.length, refused: refused.length });
+  return { ok: true, moved, refused, undoable: moved.length > 0 };
+}
+
+// ── Undo ───────────────────────────────────────────────────────────
+// Restores the last run. Each event is fetched and checked against where we
+// put it; if it has been moved again since, we leave it alone rather than
+// stomp whatever the user did next.
+async function calshiftUndo() {
+  const data = await chrome.storage.local.get([CALSHIFT_UNDO_KEY]);
+  const undo = data[CALSHIFT_UNDO_KEY];
+  if (!undo || !Array.isArray(undo.items) || undo.items.length === 0) {
+    throw new Error("nothing to undo");
+  }
+
+  // Records written before custom ranges existed carry no `days`; every one
+  // of those runs was today → tomorrow.
+  const days = Number.isInteger(undo.days) ? undo.days : 1;
+  const calendarTz = await calshiftCalendarTz();
+  const restored = [];
+  const refused = [];
+
+  for (const item of undo.items) {
+    try {
+      const ev = await calshiftApi(
+        "/calendars/primary/events/" + encodeURIComponent(item.id),
+        { method: "GET" }, false
+      );
+      const currentStart = (ev.start && (ev.start.dateTime || ev.start.date)) || "";
+      const stillOurs = currentStart && item.newStart
+        && new Date(currentStart).getTime() === new Date(item.newStart).getTime();
+      if (!stillOurs) {
+        refused.push({ summary: item.summary, reason: "moved again since" });
+        calshiftLog("warn", "undo.refused", { id: item.id, expected: item.newStart, found: currentStart });
+        continue;
+      }
+
+      // Rebuild the original start/end by shifting the current values back
+      // through the same wall-clock path the forward move used.
+      const back = calshiftShiftOf(ev, calendarTz, -days);
+      await calshiftApi(
+        "/calendars/primary/events/" + encodeURIComponent(item.id) + "?sendUpdates=none",
+        { method: "PATCH", body: JSON.stringify({ start: back.start, end: back.end }) },
+        false
+      );
+      restored.push(item.summary);
+      calshiftLog("info", "undo.restored", { id: item.id });
+    } catch (err) {
+      refused.push({ summary: item.summary, reason: err.message });
+      calshiftLog("error", "undo.fail", { id: item.id, error: err.message });
+    }
+  }
+
+  await chrome.storage.local.remove([CALSHIFT_UNDO_KEY]);
+  await calshiftWriteStatus({
+    state: "done", moved: 0, failed: refused.length, total: undo.items.length,
+    at: Date.now(), lastError: refused.length ? refused[0].reason : "",
+  });
+
+  calshiftLog("info", "undo.done", { restored: restored.length, refused: refused.length, days });
+  return { ok: true, restored, refused, from: undo.from || "" };
+}
+
+// ── Messages ───────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg !== "object") return;
+  if (typeof msg.type !== "string" || !msg.type.startsWith("calshift.")) return;
+  // Popup-only surface. No content script and no page can reach these.
+  if (!sender || sender.id !== chrome.runtime.id) return;
+
+  const fail = (err) => sendResponse({ ok: false, error: (err && err.message) || "unknown" });
+
+  if (msg.type === "calshift.preview") {
+    const range = { preset: msg.preset, from: msg.from, to: msg.to };
+    calshiftLog("info", "msg.preview", range);
+    calshiftPlan(range).then(sendResponse).catch(fail);
+    return true;
+  }
+  if (msg.type === "calshift.apply") {
+    // Absolute dates only — the ones the preview resolved to. A shortcut here
+    // would re-resolve "today" and could move a different day than was shown.
+    const range = { from: msg.from, to: msg.to };
+    calshiftLog("info", "msg.apply", { count: Array.isArray(msg.items) ? msg.items.length : 0, from: msg.from, to: msg.to });
+    calshiftApply(msg.items, range).then(sendResponse).catch((err) => {
+      calshiftWriteStatus({
+        state: "error", moved: 0, failed: 0, total: 0, at: Date.now(),
+        lastError: (err && err.message) || "unknown",
+      });
+      fail(err);
+    });
+    return true;
+  }
+  if (msg.type === "calshift.undo") {
+    calshiftLog("info", "msg.undo");
+    calshiftUndo().then(sendResponse).catch(fail);
+    return true;
+  }
+  if (msg.type === "calshift.state") {
+    chrome.storage.local.get([CALSHIFT_STATUS_KEY, CALSHIFT_UNDO_KEY]).then((d) => {
+      const undo = d[CALSHIFT_UNDO_KEY];
+      sendResponse({
+        ok: true,
+        status: d[CALSHIFT_STATUS_KEY] || null,
+        undoCount: undo && Array.isArray(undo.items) ? undo.items.length : 0,
+        undoAt: undo ? undo.at : 0,
+      });
+    }).catch(fail);
+    return true;
+  }
+});

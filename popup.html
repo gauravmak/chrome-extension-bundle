@@ -436,6 +436,60 @@
     .wasend-progress.ok   { color: #4caf50; }
     .wasend-progress.err  { color: #e94560; }
 
+    /* ── Calendar reschedule ── */
+    .cal-head { font-size: 11px; color: #888; padding: 2px 2px 8px; line-height: 1.5; }
+    .cal-head b { color: #c0c0c0; font-weight: 600; }
+    .cal-btns { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+    .cal-btns button {
+      padding: 7px 14px; border-radius: 6px;
+      border: none; font-size: 12px; font-weight: 600;
+      cursor: pointer; background: #333; color: #e0e0e0;
+    }
+    .cal-btns button:hover { background: #444; }
+    .cal-btns button:disabled { opacity: .45; cursor: default; }
+    .cal-btns #calApply { background: #25623c; color: #fff; }
+    .cal-btns #calApply:hover:not(:disabled) { background: #2e7a4b; }
+    .cal-btns #calApply.armed { background: #e94560; color: #fff; }
+    .cal-btns #calApply.armed:hover { background: #c73650; }
+    .cal-range { align-items: center; }
+    .cal-range input[type=date] {
+      padding: 5px 6px; border-radius: 6px; border: 1px solid #2a2a4a;
+      background: #16162e; color: #e0e0e0; font-size: 12px;
+      color-scheme: dark;
+    }
+    .cal-range .cal-arrow { color: #4caf50; font-size: 12px; }
+    .cal-list { display: flex; flex-direction: column; gap: 4px; }
+    .cal-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 7px 9px; border-radius: 6px;
+      background: #16162e; border: 1px solid #22224a;
+      font-size: 12px; line-height: 1.45;
+    }
+    .cal-row.skip { opacity: .6; background: #131322; }
+    .cal-row input[type=checkbox] { margin-top: 2px; flex: none; cursor: pointer; }
+    .cal-row .cal-body { min-width: 0; flex: 1; }
+    .cal-row .cal-title {
+      color: #e0e0e0; font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .cal-row .cal-meta { font-size: 11px; color: #7a7a95; }
+    .cal-row .cal-meta .arrow { color: #4caf50; }
+    .cal-row .cal-tag {
+      display: inline-block; margin-left: 6px;
+      font-size: 10px; padding: 0 5px; border-radius: 4px;
+      background: #2a2a4a; color: #9a9ab5; vertical-align: 1px;
+    }
+    .cal-row .cal-tag.warn { background: #4a3a10; color: #f0a020; }
+    .cal-empty { font-size: 12px; color: #666; padding: 14px 2px; }
+    .cal-status {
+      font-size: 11px; color: #666;
+      padding: 6px 2px; min-height: 16px; word-break: break-word;
+    }
+    .cal-status.run { color: #6ab0f3; }
+    .cal-status.ok  { color: #4caf50; }
+    .cal-status.err { color: #e94560; }
+    .cal-sub { font-size: 11px; color: #666; margin: 12px 0 6px; }
+
     /* ── YouTube Unhook ── */
     .unhook-big-toggle {
       display: flex; flex-direction: column; align-items: center;
@@ -838,6 +892,7 @@
     <button data-page="jsonformat">{} JSON</button>
     <button data-page="darkmode">🌙 Dark</button>
     <button data-page="nocookie">🚫 GDPR</button>
+    <button data-page="calshift">📅 Calendar</button>
   </div>
 
   <!-- ═══ Quick Actions Page ═══ -->
@@ -1289,6 +1344,39 @@
   </div>
 
   <!-- ═══ Local AI Page ═══ -->
+  <!-- ═══ Calendar reschedule Page ═══ -->
+  <div class="page" id="page-calshift">
+    <div class="page-body">
+      <h2>📅 Move a day's events</h2>
+      <div class="cal-head" id="calHead">
+        Reschedules <b>solo</b> events only — anything with another guest or a
+        room is left alone, so nothing ever mails anyone.
+      </div>
+      <div class="cal-btns">
+        <button class="cal-preset" data-preset="today-tomorrow">Today → Tomorrow</button>
+        <button class="cal-preset" data-preset="yesterday-today">Yesterday → Today</button>
+      </div>
+      <div class="cal-btns cal-range">
+        <input type="date" id="calFrom" aria-label="Move events from">
+        <span class="cal-arrow">→</span>
+        <input type="date" id="calTo" aria-label="Move events to">
+        <button id="calPreview">Preview</button>
+      </div>
+      <div class="cal-btns">
+        <button id="calApply" disabled>Move 0 events</button>
+        <button id="calUndo" disabled>Undo</button>
+      </div>
+      <div class="cal-status" id="calStatus"></div>
+      <div class="cal-list" id="calList">
+        <div class="cal-empty">Pick a shortcut, or two dates and Preview.</div>
+      </div>
+      <div id="calSkipWrap" style="display:none">
+        <div class="cal-sub">Left alone</div>
+        <div class="cal-list" id="calSkipList"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="page" id="page-localai">
     <div class="page-body">
       <div class="localhost-header">

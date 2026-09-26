@@ -2,9 +2,13 @@
   "manifest_version": 3,
   "name": "🧰 Chrome Toolbelt",
   "version": "2.0",
-  "description": "Personal Chrome toolbelt — dark mode, GDPR cookie dismisser, focus mode (hide feeds + sidebars on YT/X/LinkedIn/FB/Reddit), auto-bounce distractions to your reading list, cookie editor, redirect tracer, live CSS editor, JS toggle, JSON formatter, picture-in-picture, Google Maps links, view image, save to reading material, copy page as markdown, Calendar quick actions, localhost jumper, color picker, fake form filler, settings backup.",
-  "permissions": ["tabs", "storage", "cookies", "activeTab", "webRequest", "webNavigation", "contentSettings", "scripting", "bookmarks", "history"],
+  "description": "Personal Chrome toolbelt — dark mode, GDPR cookie dismisser, focus mode (hide feeds + sidebars on YT/X/LinkedIn/FB/Reddit), auto-bounce distractions to your reading list, cookie editor, redirect tracer, live CSS editor, JS toggle, JSON formatter, picture-in-picture, Google Maps links, view image, save to reading material, copy page as markdown, Calendar quick actions + move a day's events to another day, localhost jumper, color picker, fake form filler, settings backup.",
+  "permissions": ["tabs", "storage", "cookies", "activeTab", "webRequest", "webNavigation", "contentSettings", "scripting", "bookmarks", "history", "identity"],
   "host_permissions": ["<all_urls>"],
+  "oauth2": {
+    "client_id": "500909184563-mauf4gcrpdjim9sd6vmtovcsgtdbvccg.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/calendar.events"]
+  },
   "background": {
     "service_worker": "background.js"
   },
