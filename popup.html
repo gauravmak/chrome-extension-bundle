@@ -336,6 +336,28 @@
     .focus-row .focus-desc {
       font-size: 11px; color: #888; margin-top: 2px;
     }
+    .focus-snooze-note {
+      font-size: 11px; color: #e94560; margin-top: 3px;
+    }
+    .focus-snooze-picker {
+      padding: 8px 10px 10px; margin: -2px 0 6px;
+      background: #0f1e3d; border: 1px solid #2a2a4a; border-radius: 8px;
+    }
+    .focus-snooze-title {
+      font-size: 11px; color: #888; margin-bottom: 6px;
+    }
+    .focus-snooze-btns {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .focus-snooze-btns button {
+      padding: 5px 9px; border: 1px solid #2a2a4a;
+      background: #16213e; color: #e0e0e0;
+      border-radius: 6px; font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .focus-snooze-btns button:hover { border-color: #e94560; color: #e94560; }
+    .focus-snooze-btns button:focus { outline: none; }
+    .focus-snooze-btns .focus-snooze-cancel { color: #888; margin-left: auto; }
     .focus-redirect-config {
       padding: 2px 2px 4px;
     }
@@ -1230,7 +1252,7 @@
       </div>
 
       <div class="xdim-note" style="margin-top:10px">
-        Toggle off if any site breaks.
+        Switching a setting off pauses it — it turns itself back on when the time is up.
       </div>
     </div>
   </div>

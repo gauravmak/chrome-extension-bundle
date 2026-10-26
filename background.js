@@ -633,6 +633,99 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ═══════════════════════════════════
+//  Focus → timed off (snooze)
+//
+//  Switching a Focus toggle off in the popup is never permanent: the popup
+//  writes the toggle as false plus an entry in KEY_FOCUS_SNOOZE
+//  (storageKey → epoch ms). We keep one chrome.alarm per entry and, when it
+//  fires, flip the toggle back on and tell open tabs. Alarms can be dropped on
+//  a browser restart, so every worker start re-syncs them from storage and
+//  restores anything already overdue.
+// ═══════════════════════════════════
+const KEY_FOCUS_SNOOZE = "sl_focus_snooze";
+const FOCUS_SNOOZE_ALARM_PREFIX = "focus_snooze:";
+const X_URLS = ["*://x.com/*", "*://twitter.com/*", "*://mobile.x.com/*", "*://mobile.twitter.com/*"];
+// Every key the popup may snooze → the content-script message that switches it
+// back on (mirrors FOCUS_SITES in popup.js). Bounce keys need no message: the
+// storage listener above picks them up. Doubles as the allowlist of keys we
+// will ever write from a snooze entry.
+const FOCUS_SNOOZE_TARGETS = {
+  unhook_enabled:   { msg: { type: "unhook_toggle" }, urls: ["*://www.youtube.com/*", "*://m.youtube.com/*"] },
+  xunhook_enabled:  { msg: { type: "xunhook_toggle" }, urls: X_URLS },
+  nfe_x:            { msg: { type: "nfe_toggle", site: "x" }, urls: X_URLS },
+  nfe_linkedin:     { msg: { type: "nfe_toggle", site: "linkedin" }, urls: ["*://*.linkedin.com/*"] },
+  liunhook_enabled: { msg: { type: "liunhook_toggle" }, urls: ["*://*.linkedin.com/*"] },
+  nfe_facebook:     { msg: { type: "nfe_toggle", site: "facebook" }, urls: ["*://*.facebook.com/*"] },
+  nfe_instagram:    { msg: { type: "nfe_toggle", site: "instagram" }, urls: ["*://*.instagram.com/*"] },
+  nfe_reddit:       { msg: { type: "nfe_toggle", site: "reddit" }, urls: ["*://*.reddit.com/*"] },
+  ...Object.fromEntries(Object.values(FOCUS_REDIRECT_KEYS).map((k) => [k, null])),
+};
+
+function validFocusSnoozes(map) {
+  const out = {};
+  if (!map || typeof map !== "object") return out;
+  for (const [key, until] of Object.entries(map)) {
+    if (key in FOCUS_SNOOZE_TARGETS && Number.isFinite(until)) out[key] = until;
+  }
+  return out;
+}
+
+async function endFocusSnooze(key) {
+  if (!(key in FOCUS_SNOOZE_TARGETS)) return;
+  const d = await chrome.storage.local.get([KEY_FOCUS_SNOOZE]);
+  const map = validFocusSnoozes(d[KEY_FOCUS_SNOOZE]);
+  if (!(key in map)) return; // already resumed by hand
+  if (map[key] > Date.now() + 5000) return; // re-snoozed since; its own alarm will fire
+  delete map[key];
+  await chrome.storage.local.set({ [key]: true, [KEY_FOCUS_SNOOZE]: map });
+  SL.log.action("bg", "focusSnooze.ended", { key });
+  const target = FOCUS_SNOOZE_TARGETS[key];
+  if (!target) return;
+  try {
+    const tabs = await chrome.tabs.query({ url: target.urls });
+    for (const t of tabs) {
+      chrome.tabs.sendMessage(t.id, { ...target.msg, enabled: true }).catch(() => {});
+    }
+  } catch (err) {
+    SL.log.warn("bg", "focusSnooze.broadcast.fail", { key, error: err.message });
+  }
+}
+
+// Make the set of alarms match the snooze map: one alarm per future entry,
+// overdue entries restored now, stray alarms cleared.
+async function syncFocusSnoozeAlarms() {
+  try {
+    const d = await chrome.storage.local.get([KEY_FOCUS_SNOOZE]);
+    const map = validFocusSnoozes(d[KEY_FOCUS_SNOOZE]);
+    const now = Date.now();
+    for (const a of await chrome.alarms.getAll()) {
+      if (!a.name.startsWith(FOCUS_SNOOZE_ALARM_PREFIX)) continue;
+      if (!(a.name.slice(FOCUS_SNOOZE_ALARM_PREFIX.length) in map)) await chrome.alarms.clear(a.name);
+    }
+    for (const [key, until] of Object.entries(map)) {
+      if (until <= now) await endFocusSnooze(key);
+      else await chrome.alarms.create(FOCUS_SNOOZE_ALARM_PREFIX + key, { when: until });
+    }
+    SL.log.info("bg", "focusSnooze.synced", { active: Object.keys(map).length });
+  } catch (err) {
+    SL.log.warn("bg", "focusSnooze.sync.fail", { error: err.message });
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm.name.startsWith(FOCUS_SNOOZE_ALARM_PREFIX)) return;
+  endFocusSnooze(alarm.name.slice(FOCUS_SNOOZE_ALARM_PREFIX.length)).catch((err) => {
+    SL.log.warn("bg", "focusSnooze.end.fail", { alarm: alarm.name, error: err.message });
+  });
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && KEY_FOCUS_SNOOZE in changes) syncFocusSnoozeAlarms();
+});
+
+syncFocusSnoozeAlarms();
+
+// ═══════════════════════════════════
 //  WhatsApp send queue (wasend)
 //
 //  Manually triggered from the popup's Quick tab: a small queue of

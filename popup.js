@@ -747,22 +747,158 @@ const FOCUS_REDIRECT_SITES = [
   { elId: "focusRedirectInstagram", storageKey: "focus_redirect_instagram", label: "Instagram" },
 ];
 
+// Switching a Focus toggle OFF is never permanent: it opens a picker and the
+// setting pauses for the chosen time. The re-enable runs in background.js
+// (chrome.alarms) so it fires with the popup closed. Snoozes live in one map,
+// storageKey → epoch ms when the toggle turns back on.
+const KEY_FOCUS_SNOOZE = "sl_focus_snooze";
+const FOCUS_SNOOZE_OPTIONS = [
+  { label: "5 min", ms: 5 * 60 * 1000 },
+  { label: "10 min", ms: 10 * 60 * 1000 },
+  { label: "30 min", ms: 30 * 60 * 1000 },
+  { label: "Half a day", ms: 12 * 60 * 60 * 1000 },
+  { label: "2 days", ms: 2 * 24 * 60 * 60 * 1000 },
+];
+
+async function getFocusSnoozes() {
+  const d = await chrome.storage.local.get([KEY_FOCUS_SNOOZE]);
+  const map = d[KEY_FOCUS_SNOOZE];
+  return map && typeof map === "object" ? map : {};
+}
+
+// "18:30" today, "Wed 18:30" on another day.
+function formatSnoozeUntil(until) {
+  const d = new Date(until);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return d.toLocaleDateString([], { weekday: "short" }) + " " + time;
+}
+
+function focusRowLabel(el) {
+  return el.closest(".focus-row").querySelector(".focus-site").textContent;
+}
+
+// Show "Paused — back on at …" under a snoozed row's description.
+function renderFocusSnoozeNote(el, until) {
+  const info = el.closest(".focus-row").querySelector(".focus-info");
+  let note = info.querySelector(".focus-snooze-note");
+  if (!until) {
+    if (note) note.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "focus-snooze-note";
+    info.appendChild(note);
+  }
+  note.textContent = "⏸ Paused — back on at " + formatSnoozeUntil(until);
+}
+
+function closeFocusSnoozePicker() {
+  const open = document.querySelector(".focus-snooze-picker");
+  if (open) open.remove();
+}
+
+// Open the duration picker under a row. `apply(false)` performs that toggle's
+// normal OFF side effects once a duration is chosen.
+function openFocusSnoozePicker(el, storageKey, label, apply) {
+  closeFocusSnoozePicker();
+  const row = el.closest(".focus-row");
+  const picker = document.createElement("div");
+  picker.className = "focus-snooze-picker";
+  const title = document.createElement("div");
+  title.className = "focus-snooze-title";
+  title.textContent = "Turn off for…";
+  picker.appendChild(title);
+  const btns = document.createElement("div");
+  btns.className = "focus-snooze-btns";
+  for (const opt of FOCUS_SNOOZE_OPTIONS) {
+    const b = document.createElement("button");
+    b.textContent = opt.label;
+    b.addEventListener("click", async () => {
+      const until = Date.now() + opt.ms;
+      log("focus.snooze", { storageKey, minutes: opt.ms / 60000 });
+      const map = await getFocusSnoozes();
+      map[storageKey] = until;
+      await chrome.storage.local.set({ [storageKey]: false, [KEY_FOCUS_SNOOZE]: map });
+      closeFocusSnoozePicker();
+      el.checked = false;
+      renderFocusSnoozeNote(el, until);
+      const tabsFound = await apply(false);
+      notify(label + " off for " + opt.label + " — back on at " + formatSnoozeUntil(until) +
+        (tabsFound ? ` (${tabsFound} tab${tabsFound > 1 ? "s" : ""})` : ""), "info");
+    });
+    btns.appendChild(b);
+  }
+  const cancel = document.createElement("button");
+  cancel.className = "focus-snooze-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    // no-notify: dismissing the picker leaves the setting unchanged
+    log("focus.snooze.cancel", { storageKey });
+    closeFocusSnoozePicker();
+  });
+  btns.appendChild(cancel);
+  picker.appendChild(btns);
+  row.after(picker);
+}
+
+// Turning a toggle back ON before its time is up drops the pending snooze.
+async function clearFocusSnooze(el, storageKey) {
+  renderFocusSnoozeNote(el, null);
+  const map = await getFocusSnoozes();
+  if (!(storageKey in map)) return;
+  delete map[storageKey];
+  await chrome.storage.local.set({ [KEY_FOCUS_SNOOZE]: map });
+}
+
 async function loadFocus() {
   const keys = FOCUS_SITES.map((s) => s.storageKey);
-  keys.push(...FOCUS_REDIRECT_SITES.map((s) => s.storageKey), "focus_redirect_li_profile");
+  keys.push(...FOCUS_REDIRECT_SITES.map((s) => s.storageKey), "focus_redirect_li_profile", KEY_FOCUS_SNOOZE);
   const data = await chrome.storage.local.get(keys);
+  const snoozes = data[KEY_FOCUS_SNOOZE] || {};
   for (const s of FOCUS_SITES) {
     const stored = data[s.storageKey];
     const enabled = stored === undefined ? s.defaultOn : stored === true;
     const el = document.getElementById(s.elId);
-    if (el) el.checked = enabled;
+    if (!el) continue;
+    el.checked = enabled;
+    renderFocusSnoozeNote(el, enabled ? null : snoozes[s.storageKey]);
   }
   for (const s of FOCUS_REDIRECT_SITES) {
     const el = document.getElementById(s.elId);
-    if (el) el.checked = data[s.storageKey] === true; // bounce defaults OFF
+    if (!el) continue;
+    el.checked = data[s.storageKey] === true; // bounce defaults OFF
+    renderFocusSnoozeNote(el, el.checked ? null : snoozes[s.storageKey]);
   }
   const frLiEl = document.getElementById("focusRedirectLi");
   if (frLiEl) frLiEl.value = data.focus_redirect_li_profile || "";
+}
+
+// A snooze ending (background alarm) flips the toggle while the popup may be open.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !(KEY_FOCUS_SNOOZE in changes)) return;
+  if (document.getElementById("page-focus").classList.contains("active")) loadFocus();
+});
+
+// Persist + tell open tabs. Returns how many matching tabs were found.
+async function applyFocusSite(s, enabled) {
+  await chrome.storage.local.set({ [s.storageKey]: enabled });
+  let tabsFound = 0;
+  try {
+    const tabs = await chrome.tabs.query({ url: s.urlPatterns });
+    tabsFound = tabs.length;
+    for (const t of tabs) {
+      const msg = { type: s.msgType, enabled };
+      if (s.nfeSite) msg.site = s.nfeSite;
+      chrome.tabs.sendMessage(t.id, msg).catch((e) => {
+        logWarn("focus.sendMessage.fail", { tabId: t.id, error: e && e.message });
+      });
+    }
+  } catch (err) {
+    logError("focus.tabs.query.fail", { error: err.message });
+  }
+  return tabsFound;
 }
 
 for (const s of FOCUS_SITES) {
@@ -771,23 +907,15 @@ for (const s of FOCUS_SITES) {
   el.addEventListener("change", async () => {
     const enabled = el.checked;
     log("focus." + s.elId, { enabled, storageKey: s.storageKey });
-    await chrome.storage.local.set({ [s.storageKey]: enabled });
-    let tabsFound = 0;
-    try {
-      const tabs = await chrome.tabs.query({ url: s.urlPatterns });
-      tabsFound = tabs.length;
-      for (const t of tabs) {
-        const msg = { type: s.msgType, enabled };
-        if (s.nfeSite) msg.site = s.nfeSite;
-        chrome.tabs.sendMessage(t.id, msg).catch((e) => {
-          logWarn("focus.sendMessage.fail", { tabId: t.id, error: e && e.message });
-        });
-      }
-    } catch (err) {
-      logError("focus.tabs.query.fail", { error: err.message });
+    if (!enabled) {
+      el.checked = true; // stays on until a duration is picked
+      openFocusSnoozePicker(el, s.storageKey, focusRowLabel(el), (on) => applyFocusSite(s, on));
+      return;
     }
-    const label = el.closest(".focus-row").querySelector(".focus-site").textContent;
-    notify(label + " " + (enabled ? "ON" : "OFF") + (tabsFound ? ` (${tabsFound} tab${tabsFound > 1 ? "s" : ""})` : ""), enabled ? "ok" : "info");
+    closeFocusSnoozePicker();
+    await clearFocusSnooze(el, s.storageKey);
+    const tabsFound = await applyFocusSite(s, true);
+    notify(focusRowLabel(el) + " ON" + (tabsFound ? ` (${tabsFound} tab${tabsFound > 1 ? "s" : ""})` : ""), "ok");
   });
 }
 
@@ -815,11 +943,14 @@ for (const s of FOCUS_REDIRECT_SITES) {
   el.addEventListener("change", async () => {
     const enabled = el.checked;
     log("focus.redirect.toggle", { platform: s.storageKey, enabled });
-    await chrome.storage.local.set({ [s.storageKey]: enabled });
     if (!enabled) {
-      notify("Bounce " + s.label + " OFF", "info");
+      el.checked = true; // stays on until a duration is picked
+      openFocusSnoozePicker(el, s.storageKey, "Bounce " + s.label, async () => 0);
       return;
     }
+    closeFocusSnoozePicker();
+    await clearFocusSnooze(el, s.storageKey);
+    await chrome.storage.local.set({ [s.storageKey]: true });
     // Turning a platform on: warn if there's nothing to bounce to yet.
     const count = await readingMaterialCount();
     if (count === 0) notify("Bounce " + s.label + " ON — Reading Material is empty, save some pages first", "info");
