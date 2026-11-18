@@ -565,9 +565,91 @@ async function maybeRedirectTab(tabId, rawUrl) {
     await chrome.tabs.update(tabId, { url: target });
     // Queue an in-page toast to fire once the destination finishes loading.
     pendingRedirectToast.set(tabId, redirectToastMessage(reason));
+    rememberBounce(tabId, rawUrl, platform, target);
   } catch (err) {
     SL.log.warn("bg", "focusRedirect.update.fail", { tabId, error: err.message });
   }
+}
+
+// ── Bounce-back: remember where a bounced tab was going ──
+// tabId → { from, platform, host, fromHost }. `host` is the host the tab is
+// on now (the Reading Material page). When that platform's bounce is switched
+// off (snoozed or plain off), any tab still on `host` is sent back to `from`.
+// Leaving `host` by the user's own navigation forgets the entry, so we never
+// yank a tab that has moved on. Session storage: tab ids die with the browser.
+const KEY_FOCUS_BOUNCED = "sl_focus_bounced";
+let focusBounced = {};
+const focusBouncedReady = (async () => {
+  try {
+    const d = await chrome.storage.session.get([KEY_FOCUS_BOUNCED]);
+    const m = d[KEY_FOCUS_BOUNCED];
+    focusBounced = m && typeof m === "object" ? m : {};
+  } catch (err) {
+    SL.log.warn("bg", "focusBounce.restore.fail", { error: err.message });
+  }
+})();
+
+function persistFocusBounced() {
+  chrome.storage.session.set({ [KEY_FOCUS_BOUNCED]: focusBounced }).catch((err) => {
+    SL.log.warn("bg", "focusBounce.persist.fail", { error: err.message });
+  });
+}
+
+async function rememberBounce(tabId, from, platform, target) {
+  await focusBouncedReady;
+  const fromU = safeUrl(from), toU = safeUrl(target);
+  if (!fromU || !toU || !isHttpUrl(from)) return;
+  focusBounced[tabId] = { from, platform, host: toU.hostname, fromHost: fromU.hostname };
+  persistFocusBounced();
+  SL.log.info("bg", "focusBounce.saved", { tabId, platform, from: from.slice(0, 120) });
+}
+
+// Track the bounced tab: follow redirects of the destination, forget the entry
+// once the user navigates to some other site.
+chrome.webNavigation.onCommitted.addListener(async (d) => {
+  if (d.frameId !== 0) return;
+  await focusBouncedReady;
+  const entry = focusBounced[d.tabId];
+  if (!entry) return;
+  const u = safeUrl(d.url);
+  const host = u ? u.hostname : "";
+  if (host === entry.host || host === entry.fromHost) return; // fromHost: the aborted original load
+  const q = d.transitionQualifiers || [];
+  if (q.includes("server_redirect") || q.includes("client_redirect")) {
+    entry.host = host; // destination bookmark redirected elsewhere — still the bounced page
+  } else {
+    delete focusBounced[d.tabId];
+    SL.log.info("bg", "focusBounce.forgotten", { tabId: d.tabId, platform: entry.platform });
+  }
+  persistFocusBounced();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!(tabId in focusBounced)) return;
+  delete focusBounced[tabId];
+  persistFocusBounced();
+});
+
+// A platform's bounce was switched off: send its still-bounced tabs back to
+// where they were going. The platform flag is already false, so the return
+// trip isn't bounced again.
+async function restoreBouncedTabs(platforms) {
+  await focusBouncedReady;
+  for (const [tabId, entry] of Object.entries(focusBounced)) {
+    if (!platforms.includes(entry.platform)) continue;
+    delete focusBounced[tabId];
+    try {
+      const tab = await chrome.tabs.get(Number(tabId));
+      const cur = safeUrl(tab.url);
+      if (!cur || cur.hostname !== entry.host) continue; // moved on — leave it alone
+      if (!isHttpUrl(entry.from)) continue;               // CLAUDE.md: http(s) only
+      await chrome.tabs.update(Number(tabId), { url: entry.from });
+      SL.log.action("bg", "focusBounce.restored", { tabId, platform: entry.platform, to: entry.from.slice(0, 120) });
+    } catch (err) {
+      SL.log.warn("bg", "focusBounce.restore.tab.fail", { tabId, error: err.message }); // tab gone
+    }
+  }
+  persistFocusBounced();
 }
 
 async function sweepOpenTabsForRedirect() {
@@ -601,13 +683,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
     SL.log.info("bg", "focusRedirect.liProfile.updated", { hasLiProfile: !!focusRedirectLiSlug });
   }
   let turnedOn = false;
+  const turnedOff = [];
   for (const [platform, key] of Object.entries(FOCUS_REDIRECT_KEYS)) {
     if (!(key in changes)) continue;
     focusRedirectPlatforms[platform] = changes[key].newValue === true;
     SL.log.info("bg", "focusRedirect.platformChanged", { platform, enabled: focusRedirectPlatforms[platform] });
     if (focusRedirectPlatforms[platform]) turnedOn = true;
+    else turnedOff.push(platform);
   }
   if (turnedOn) sweepOpenTabsForRedirect(); // bounce already-open time-sink tabs
+  if (turnedOff.length) restoreBouncedTabs(turnedOff); // send bounced tabs back where they were going
 });
 
 chrome.webNavigation.onBeforeNavigate.addListener((d) => {

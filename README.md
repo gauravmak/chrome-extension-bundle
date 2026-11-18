@@ -14,7 +14,7 @@ A personal Chrome extension that bundles browser utilities, focus tools, and pag
 
 ### Focus
 - **Focus Mode** — Hide the feed and/or sidebar on YouTube, X/Twitter, LinkedIn, Facebook, and Reddit, plus LinkedIn's red new-posts dot on the Home icon. Search, profiles, and direct links keep working.
-- **Bounce to Reading Material** — When enabled, opening YouTube's home page, the LinkedIn feed, or your own LinkedIn profile redirects you to the oldest bookmark in your "Reading Material" folder, with an on-page notice that the redirect happened.
+- **Bounce to Reading Material** — When enabled, opening YouTube's home page, the LinkedIn feed, or your own LinkedIn profile redirects you to the oldest bookmark in your "Reading Material" folder, with an on-page notice that the redirect happened. The page you were opening is remembered per tab: switch that platform's bounce off (or pause it) and the tab goes back there, unless you've since navigated that tab to another site.
 
 ### Page tools
 - **Reading Material** — Save the current page to a "Reading Material" bookmark folder. The Quick tab previews the oldest saved article and lets you open or delete it (with undo).
